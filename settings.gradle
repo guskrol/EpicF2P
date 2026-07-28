@@ -1,0 +1,2 @@
+rootProject.name = 'EpicF2P'
+include('f2p-goals')
