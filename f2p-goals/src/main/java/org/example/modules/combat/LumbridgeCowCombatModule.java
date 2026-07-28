@@ -72,7 +72,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private static final int MIN_DEFENCE_FOR_RANGED = 20;
     private static final int MIN_RANGED_ARROWS_EQUIPPED = 50;
     private static final int MIN_RANGED_ARROW_PURCHASE = 200;
-    public static final int RANGED_TRAINING_CAP = 40;
+    public static final int RANGED_TRAINING_CAP = 30;
     private static final String WC_FUNDING_LOG_NAME = "Logs";
     private static final String STARTER_FOOD_NAME = "Trout";
     private static final int MIN_FOOD_STOCK_TARGET = 120;

@@ -10,8 +10,8 @@ import java.util.concurrent.ThreadLocalRandom;
 public class SkillCapManager {
     private static final int MIN_CAP = 29;
     private static final int MAX_CAP = 35;
-    private static final int RANGED_CAP = 40;
-    private static final int MAGIC_CAP = 40;
+    private static final int RANGED_CAP = 30;
+    private static final int MAGIC_CAP = 25;
 
     private final Map<Skill.Skills, Integer> caps = new EnumMap<>(Skill.Skills.class);
 
