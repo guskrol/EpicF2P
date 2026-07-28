@@ -10,10 +10,13 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 public class ModuleTask implements ScriptTask {
+    private static final long LOGIN_WAIT_LOG_INTERVAL_MILLIS = 5_000L;
+
     private final Supplier<APIContext> contextSupplier;
     private final Consumer<String> logger;
     private final List<RuntimeController> runtimeControllers;
     private final List<F2PModule> modules;
+    private long nextLoginWaitLogAt;
 
     public ModuleTask(Supplier<APIContext> contextSupplier, Consumer<String> logger, List<F2PModule> modules) {
         this(contextSupplier, logger, List.of(), modules);
@@ -39,6 +42,12 @@ public class ModuleTask implements ScriptTask {
     @Override
     public void run() {
         APIContext ctx = contextSupplier.get();
+        if (!isLoggedIn(ctx)) {
+            logWaitingForLogin();
+            Time.sleep(900, 1400);
+            return;
+        }
+
         for (RuntimeController controller : runtimeControllers) {
             if (controller.shouldExecute(ctx)) {
                 runController(controller, ctx);
@@ -55,6 +64,24 @@ public class ModuleTask implements ScriptTask {
 
         logger.accept("No module was ready to execute");
         Time.sleep(600, 900);
+    }
+
+    private boolean isLoggedIn(APIContext ctx) {
+        try {
+            return ctx != null && ctx.client().isLoggedIn();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private void logWaitingForLogin() {
+        long now = System.currentTimeMillis();
+        if (now < nextLoginWaitLogAt) {
+            return;
+        }
+
+        logger.accept("Waiting for login before running F2P Goals");
+        nextLoginWaitLogAt = now + LOGIN_WAIT_LOG_INTERVAL_MILLIS;
     }
 
     private void runController(RuntimeController controller, APIContext ctx) {
