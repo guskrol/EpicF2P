@@ -53,7 +53,13 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
 
     protected boolean ensureAnyTool(APIContext ctx, String toolLabel, String... toolNames) {
         if (hasAnyTool(ctx, toolNames)) {
+            clearPendingToolPurchase();
             return true;
+        }
+
+        if (pendingToolPurchase != null) {
+            handlePendingToolPurchase(ctx, toolLabel);
+            return hasAnyTool(ctx, toolNames);
         }
 
         if (!isBankOpen(ctx)) {
@@ -80,9 +86,57 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
             }
         }
 
+        String fallbackTool = fallbackToolName(toolNames);
+        if (fallbackTool != null && planMissingToolPurchase(ctx, toolLabel, fallbackTool)) {
+            return false;
+        }
+
         log("Missing " + toolLabel + " in bank/inventory");
         Time.sleep(1200, 1800);
         return false;
+    }
+
+    private boolean planMissingToolPurchase(APIContext ctx, String toolLabel, String toolName) {
+        long now = System.currentTimeMillis();
+        if (now < toolPurchaseRetryAt) {
+            return false;
+        }
+
+        int buyPrice = toolBuyPrice(ctx, toolName);
+        int inventoryCoins = ctx.inventory().getCount(true, "Coins");
+        int bankCoins = ctx.bank().getCount("Coins");
+        int availableCoins = inventoryCoins + bankCoins;
+        if (availableCoins < buyPrice) {
+            log("Missing " + toolLabel + " and not enough coins for " + toolName
+                    + " (" + availableCoins + "/" + buyPrice + ")");
+            toolPurchaseRetryAt = now + ThreadLocalRandom.current().nextLong(4, 8) * 60_000L;
+            ctx.bank().close();
+            Time.sleep(600, 900);
+            return true;
+        }
+
+        pendingToolPurchase = toolName;
+        pendingToolBuyPrice = buyPrice;
+        pendingToolOfferCheckAt = 0L;
+        if (inventoryCoins < buyPrice && bankCoins > 0) {
+            int neededCoins = Math.min(buyPrice - inventoryCoins, bankCoins);
+            log("Withdrawing " + neededCoins + " coins for missing " + toolLabel + ": " + toolName);
+            ctx.bank().withdraw(neededCoins, "Coins");
+            Time.sleep(600, 900);
+            return true;
+        }
+
+        log("Planning missing " + toolLabel + " purchase: " + toolName);
+        ctx.bank().close();
+        Time.sleep(600, 900);
+        return true;
+    }
+
+    private String fallbackToolName(String... toolNames) {
+        if (toolNames == null || toolNames.length == 0) {
+            return null;
+        }
+        return toolNames[toolNames.length - 1];
     }
 
     protected boolean ensureToolUpgrade(APIContext ctx, String toolLabel, String desiredTool) {

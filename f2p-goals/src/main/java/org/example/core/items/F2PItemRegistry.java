@@ -47,6 +47,10 @@ public final class F2PItemRegistry {
         register(new ItemRule("Earth rune", true, false, 8, 4, false, true, true, 0));
         register(new ItemRule("Body rune", true, false, 5, 3, false, true, true, 0));
 
+        register(new ItemRule("Small fishing net", true, false, 100, 5, true, false, true, 0));
+        register(new ItemRule("Tinderbox", true, false, 100, 5, true, false, true, 0));
+        register(new ItemRule("Bronze axe", true, false, 100, 10, true, false, true, 0));
+        register(new ItemRule("Bronze pickaxe", true, false, 100, 10, true, false, true, 0));
         register(new ItemRule("Steel axe", true, false, 600, 150, true, false, true, 0));
         register(new ItemRule("Mithril axe", true, false, 1500, 600, true, false, true, 0));
         register(new ItemRule("Steel pickaxe", true, false, 800, 250, true, false, true, 0));
