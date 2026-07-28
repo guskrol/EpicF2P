@@ -35,7 +35,7 @@ import java.util.List;
 
 @ScriptManifest(name = "F2P Goals", gameType = GameType.OS)
 public class F2PGoalsScript extends Script {
-    private static final String SCRIPT_VERSION = "v0.4.204-login-guard";
+    private static final String SCRIPT_VERSION = "v0.4.205-prelogin-eula";
     private static final boolean QUEST_TEST_ONLY = false;
     private static final boolean RANGED_TEST_ONLY = false;
     private static final boolean MAGIC_TEST_ONLY = false;
