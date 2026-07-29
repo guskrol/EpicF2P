@@ -24,6 +24,12 @@ public final class GePricing {
         return clampPrice(price);
     }
 
+    public static int exchangeQuickBuyPrice(APIContext ctx, String itemName, long fallbackBasePrice) {
+        long market = marketBuyReference(ctx, itemName);
+        long price = market > 0L ? buyPremium(market) : Math.max(1L, fallbackBasePrice);
+        return clampPrice(price);
+    }
+
     public static int quickSellPrice(APIContext ctx, String itemName) {
         return quickSellPrice(ctx, itemName, 0L);
     }
@@ -49,7 +55,24 @@ public final class GePricing {
         return 1;
     }
 
+    public static int exchangeQuickSellPrice(APIContext ctx, String itemName, long fallbackBasePrice) {
+        long market = marketSellReference(ctx, itemName);
+
+        if (market > 0L) {
+            return clampPrice(sellDiscount(market));
+        }
+        if (fallbackBasePrice > 0L) {
+            return clampPrice(sellDiscount(fallbackBasePrice));
+        }
+        return 1;
+    }
+
     private static long marketBuyReference(APIContext ctx, String itemName) {
+        long wiki = wikiBuyReference(itemName);
+        if (wiki > 0L) {
+            return wiki;
+        }
+
         ItemDetail detail = itemDetail(ctx, itemName);
         if (detail == null) {
             return 0L;
@@ -63,6 +86,11 @@ public final class GePricing {
     }
 
     private static long marketSellReference(APIContext ctx, String itemName) {
+        long wiki = wikiSellReference(itemName);
+        if (wiki > 0L) {
+            return wiki;
+        }
+
         ItemDetail detail = itemDetail(ctx, itemName);
         if (detail == null) {
             return 0L;
@@ -73,6 +101,16 @@ public final class GePricing {
             price = (int) Math.min(price, (long) detail.getHighAlch() * 3L);
         }
         return price;
+    }
+
+    private static long wikiBuyReference(String itemName) {
+        WikiPriceClient.Price price = WikiPriceClient.latest(itemName);
+        return price == null ? 0L : price.buyReference();
+    }
+
+    private static long wikiSellReference(String itemName) {
+        WikiPriceClient.Price price = WikiPriceClient.latest(itemName);
+        return price == null ? 0L : price.sellReference();
     }
 
     private static ItemDetail itemDetail(APIContext ctx, String itemName) {

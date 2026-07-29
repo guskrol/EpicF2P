@@ -1078,17 +1078,7 @@ public class CraftingModule extends AbstractSkillingModule {
     }
 
     private int materialBuyPrice(APIContext ctx, String itemName) {
-        return GePricing.quickBuyPrice(ctx, itemName, fallbackBuyPrice(itemName));
-    }
-
-    private int fallbackBuyPrice(String itemName) {
-        if (namesMatch(itemName, LEATHER)) {
-            return 300;
-        }
-        if (namesMatch(itemName, THREAD) || namesMatch(itemName, NEEDLE)) {
-            return 100;
-        }
-        return 100;
+        return GePricing.exchangeQuickBuyPrice(ctx, itemName, 0L);
     }
 
     private boolean openBankForCrafting(APIContext ctx, String reason) {
@@ -1173,7 +1163,7 @@ public class CraftingModule extends AbstractSkillingModule {
     }
 
     private int sellPriceFor(APIContext ctx, String itemName) {
-        return GePricing.quickSellPrice(ctx, itemName, 1L);
+        return GePricing.exchangeQuickSellPrice(ctx, itemName, 1L);
     }
 
     private boolean matchesAnyName(String itemName, String... allowedNames) {
