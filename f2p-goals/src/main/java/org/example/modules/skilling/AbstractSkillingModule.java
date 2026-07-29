@@ -63,7 +63,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
         }
 
         if (!isBankOpen(ctx)) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank for " + toolLabel);
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -71,7 +71,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
             }
 
             log("Opening bank for " + toolLabel);
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> isBankOpen(ctx), 100);
             return false;
         }
@@ -159,7 +159,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
         }
 
         if (!isBankOpen(ctx)) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank for " + toolLabel + " upgrade: " + desiredTool);
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -167,7 +167,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
             }
 
             log("Opening bank for " + toolLabel + " upgrade: " + desiredTool);
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> isBankOpen(ctx), 100);
             return true;
         }
@@ -401,7 +401,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
 
     protected boolean bankAllExcept(APIContext ctx, String reason, String... keepNames) {
         if (!isBankOpen(ctx)) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank: " + reason);
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -409,7 +409,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
             }
 
             log("Opening bank: " + reason);
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> isBankOpen(ctx), 100);
             return true;
         }
@@ -430,7 +430,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
         }
 
         if (!isBankOpen(ctx)) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank: " + reason);
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -438,7 +438,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
             }
 
             log("Opening bank: " + reason);
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> isBankOpen(ctx), 100);
             return true;
         }

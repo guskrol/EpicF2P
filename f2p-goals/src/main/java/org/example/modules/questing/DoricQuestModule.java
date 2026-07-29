@@ -260,7 +260,7 @@ public class DoricQuestModule implements ManagedF2PModule {
 
     private void handleBank(APIContext ctx) {
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 stats.setStatus("Doric's Quest: walking to bank for materials");
                 logTravel("Doric's Quest: walking to GE bank for materials");
                 Navigation.walkToNoTeleports(ctx, GE_AREA.getRandomTile());
@@ -270,7 +270,7 @@ public class DoricQuestModule implements ManagedF2PModule {
 
             stats.setStatus("Doric's Quest: opening bank for materials");
             log("Doric's Quest: opening bank for materials");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(900, 1400, () -> ctx.bank().isOpen(), 100);
             return;
         }

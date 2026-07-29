@@ -11,6 +11,7 @@ import com.epicbot.api.shared.model.Tile;
 import com.epicbot.api.shared.util.time.Time;
 import org.example.core.ScriptStats;
 import org.example.core.SkillCapManager;
+import org.example.core.navigation.Navigation;
 
 import java.awt.Point;
 import java.util.ArrayList;
@@ -556,7 +557,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
 
     private void bankOres(APIContext ctx) {
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank with copper/tin ores");
                 org.example.core.navigation.Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -564,7 +565,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
             }
 
             log("Opening bank to store copper/tin ores");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return;
         }
@@ -626,7 +627,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
         }
 
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank for bronze smelting materials");
                 org.example.core.navigation.Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -634,7 +635,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
             }
 
             log("Opening bank for bronze smelting materials");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return;
         }
@@ -1236,7 +1237,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
 
     private void bankBars(APIContext ctx) {
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank with bronze bars");
                 org.example.core.navigation.Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -1244,7 +1245,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
             }
 
             log("Opening bank to store bronze bars");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return;
         }

@@ -275,7 +275,7 @@ public class GoalManagerModule implements F2PModule {
         }
 
         if (!isBankOpen(ctx)) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Preparing " + target + ": walking to bank to clear previous inventory");
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -283,7 +283,7 @@ public class GoalManagerModule implements F2PModule {
             }
 
             log("Preparing " + target + ": opening bank to clear previous inventory");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> isBankOpen(ctx), 100);
             return true;
         }

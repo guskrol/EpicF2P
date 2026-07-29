@@ -156,12 +156,12 @@ public class RuneMysteriesQuestModule implements ManagedF2PModule {
         }
 
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 return false;
             }
             stats.setStatus("Rune Mysteries: checking bank for quest item");
             log("Rune Mysteries: opening bank to recover quest item");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(900, 1400, () -> ctx.bank().isOpen(), 100);
             return true;
         }

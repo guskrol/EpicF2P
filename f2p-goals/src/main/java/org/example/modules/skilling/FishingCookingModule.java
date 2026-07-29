@@ -329,7 +329,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
         }
 
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank for cooking batch");
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -337,7 +337,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
             }
 
             log("Opening bank for cooking batch");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return;
         }
@@ -651,7 +651,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
         }
 
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank for Al Kharid Cooking travel coins");
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -659,7 +659,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
             }
 
             log("Opening bank for Al Kharid Cooking travel coins");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return true;
         }
@@ -853,7 +853,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
 
     private boolean continueCookingBankedRawFish(APIContext ctx) {
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank for next Cooking inventory");
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -861,7 +861,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
             }
 
             log("Opening bank for next Cooking inventory");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return true;
         }
@@ -1034,7 +1034,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
 
     private void bankRawFish(APIContext ctx) {
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank with raw fish");
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -1042,7 +1042,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
             }
 
             log("Opening bank to store raw fish");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return;
         }
@@ -1084,7 +1084,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
         }
 
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank with cooked fish");
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -1092,7 +1092,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
             }
 
             log("Opening bank to store cooked fish");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return;
         }

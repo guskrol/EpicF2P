@@ -239,14 +239,14 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
 
     private void handleBank(APIContext ctx) {
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 walkToBankForIngredients(ctx);
                 return;
             }
 
             stats.setStatus("Cook's Assistant: opening bank for ingredients");
             log("Cook's Assistant: opening bank for ingredients");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(900, 1400, () -> ctx.bank().isOpen(), 100);
             return;
         }
@@ -637,12 +637,16 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
     }
 
     private boolean tryOpenNearbyBank(APIContext ctx) {
-        if (ctx.bank().isReachable()) {
+        if (Navigation.isBankReachable(ctx)) {
             stats.setStatus("Cook's Assistant: opening bank for ingredients");
             log("Cook's Assistant: opening bank for ingredients");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(900, 1400, () -> ctx.bank().isOpen(), 100);
             return ctx.bank().isOpen();
+        }
+
+        if (Navigation.shouldAvoidNearestBank(ctx)) {
+            return false;
         }
 
         SceneObject bankObject = ctx.objects()

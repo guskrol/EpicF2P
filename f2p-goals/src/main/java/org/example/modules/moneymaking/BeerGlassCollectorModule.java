@@ -329,7 +329,7 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
         }
 
         log("Opening Al Kharid bank: " + reason);
-        ctx.bank().open();
+        Navigation.openBank(ctx);
         Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
         if (ctx.bank().isOpen()) {
             return true;

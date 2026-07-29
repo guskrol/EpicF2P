@@ -835,9 +835,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return true;
         }
 
-        if (ctx.bank().isReachable()) {
+        if (Navigation.isBankReachable(ctx)) {
             log("Opening bank while recovering health");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return true;
         }
@@ -1330,7 +1330,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
 
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank to fund gear upgrade: " + pendingGearPurchase.name);
                 walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -1338,7 +1338,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
             }
 
             log("Opening bank to fund gear upgrade: " + pendingGearPurchase.name);
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return true;
         }
@@ -1402,7 +1402,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return;
         }
 
-        if (!ctx.bank().isReachable()) {
+        if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank with loot while GE is restricted");
                 walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -1410,7 +1410,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
 
         log("Opening bank with loot while GE is restricted");
-        ctx.bank().open();
+        Navigation.openBank(ctx);
         Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
     }
 
@@ -2146,7 +2146,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
 
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Checking bank coins before funding");
                 walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -2154,7 +2154,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
             }
 
             log("Opening bank to audit coins before funding");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return false;
         }
@@ -2195,7 +2195,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
     private void bankWoodcuttingFundingLogs(APIContext ctx, int targetCoins) {
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank to store WC funding logs");
                 walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -2203,7 +2203,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
             }
 
             log("Opening bank to store WC funding logs");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return;
         }
@@ -2245,7 +2245,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
 
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank for WC funding axe");
                 walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -2253,7 +2253,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
             }
 
             log("Opening bank for WC funding axe");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return false;
         }
@@ -2299,7 +2299,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
 
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank to clean WC funding inventory");
                 walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -2307,7 +2307,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
             }
 
             log("Opening bank to clean WC funding inventory");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return false;
         }
@@ -2471,14 +2471,14 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
         if (!hasNotedWcFundingLogsInInventory(ctx)
                 || hasUnnotedWcFundingLogsInInventory(ctx)) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank for noted WC funding logs");
                 walkToBank(ctx);
                 Time.sleep(1200, 1800);
                 return;
             }
             log("Opening bank for noted WC funding logs");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return;
         }
@@ -2610,8 +2610,15 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return true;
         }
 
+        if (Navigation.shouldAvoidNearestBank(ctx)) {
+            log("Walking to F2P bank for " + reason);
+            walkToBank(ctx);
+            Time.sleep(1200, 1800);
+            return true;
+        }
+
         log("Opening bank directly for " + reason);
-        ctx.bank().open();
+        Navigation.openBank(ctx);
         Time.sleep(1200, 1800, () -> isBankOpen(ctx), 100);
         if (isBankOpen(ctx)) {
             return true;
@@ -2646,13 +2653,21 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private boolean isNearBankTarget(APIContext ctx) {
-        return ctx.bank().isReachable()
+        if (Navigation.shouldAvoidNearestBank(ctx)) {
+            return false;
+        }
+
+        return Navigation.isBankReachable(ctx)
                 || ctx.bank().isVisible()
                 || nearestBankObject(ctx) != null
                 || nearestBanker(ctx) != null;
     }
 
     private SceneObject nearestBankObject(APIContext ctx) {
+        if (Navigation.shouldAvoidNearestBank(ctx)) {
+            return null;
+        }
+
         SceneObject bankObject = ctx.objects()
                 .query()
                 .actions("Bank")
@@ -2672,6 +2687,10 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private NPC nearestBanker(APIContext ctx) {
+        if (Navigation.shouldAvoidNearestBank(ctx)) {
+            return null;
+        }
+
         return ctx.npcs()
                 .query()
                 .named("Banker")
@@ -4314,7 +4333,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
         buryBones(ctx);
 
         if (!ctx.bank().isOpen()) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to nearest bank");
                 walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -4322,7 +4341,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
             }
 
             log("Opening bank");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
             return;
         }

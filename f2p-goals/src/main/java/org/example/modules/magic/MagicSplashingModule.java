@@ -314,7 +314,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
             if (closeGrandExchangeForBank(ctx, "Magic setup")) {
                 return true;
             }
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank for Magic setup");
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -322,7 +322,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
             }
 
             log("Opening bank for Magic setup");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> isBankOpen(ctx), 100);
             return true;
         }
@@ -420,7 +420,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
             if (closeGrandExchangeForBank(ctx, "Magic splashing setup")) {
                 return true;
             }
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank for Magic splashing setup");
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -428,7 +428,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
             }
 
             log("Opening bank for Magic splashing setup");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> isBankOpen(ctx), 100);
             return true;
         }
@@ -518,7 +518,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
         }
 
         if (!isBankOpen(ctx) && !cursedStaffBankAudited) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank to check for Cursed goblin staff");
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -526,7 +526,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
             }
 
             log("Opening bank to check for Cursed goblin staff");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> isBankOpen(ctx), 100);
             return true;
         }
@@ -548,7 +548,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
         }
 
         if (ctx.inventory().getCount(true, "Coins") < CURSED_STAFF_DIANGO_COINS) {
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank for Cursed goblin staff coins");
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -556,7 +556,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
             }
 
             log("Opening bank for Cursed goblin staff coins");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> isBankOpen(ctx), 100);
             return true;
         }
@@ -825,7 +825,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
             if (closeGrandExchangeForBank(ctx, "Magic funding stock bank")) {
                 return true;
             }
-            if (!ctx.bank().isReachable()) {
+            if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank for Magic funding stock");
                 Navigation.walkToBank(ctx);
                 Time.sleep(1200, 1800);
@@ -833,7 +833,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
             }
 
             log("Opening bank for Magic funding stock");
-            ctx.bank().open();
+            Navigation.openBank(ctx);
             Time.sleep(1200, 1800, () -> isBankOpen(ctx), 100);
             return true;
         }
