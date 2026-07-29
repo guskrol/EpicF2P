@@ -890,10 +890,15 @@ public class CraftingModule extends AbstractSkillingModule {
         WidgetChild widget = findLeatherProductWidget(ctx, product);
         if (widget == null) {
             logInterfaceRecovery("Leather product widget not found: " + product.name());
-            return false;
+            return allowDefaultClick && clickChatboxLeatherProductFallback(ctx, product);
         }
 
         log("Clicking Crafting product: " + product.name());
+        if (allowDefaultClick
+                && (clickWidgetCenter(ctx, widget) || clickChatboxLeatherProductFallback(ctx, product))) {
+            return true;
+        }
+
         String[] actions = {"Make All", "Make-all", "Craft All", "Craft-all", "All"};
         for (String action : actions) {
             if (widget.interact(action, product.name())
@@ -904,7 +909,7 @@ public class CraftingModule extends AbstractSkillingModule {
             }
         }
 
-        if (allowDefaultClick && (clickWidgetCenter(ctx, widget) || clickWidget(ctx, widget))) {
+        if (allowDefaultClick && clickWidget(ctx, widget)) {
             return true;
         }
 
@@ -959,15 +964,15 @@ public class CraftingModule extends AbstractSkillingModule {
                 || (widget.getGroup() != null && widget.getGroup().getIndex() == INVENTORY_WIDGET_GROUP)) {
             return false;
         }
-        return widget.getItemId() > 0 || isSkillmultiWidget(widget) || isChatboxProductWidget(widget);
+        return widget.getItemId() > 0 || isChatboxProductWidget(widget);
     }
 
     private boolean selectCraftingAllQuantity(APIContext ctx) {
         WidgetChild allWidget = findCraftingAllWidget(ctx);
-        if (allWidget == null) {
-            return false;
+        if (allWidget != null && (clickWidgetCenter(ctx, allWidget) || clickWidget(ctx, allWidget))) {
+            return true;
         }
-        return clickWidgetCenter(ctx, allWidget) || clickWidget(ctx, allWidget);
+        return clickChatboxAllFallback(ctx);
     }
 
     private WidgetChild findCraftingAllWidget(APIContext ctx) {
@@ -1030,7 +1035,62 @@ public class CraftingModule extends AbstractSkillingModule {
                 && widget.getWidth() >= 25
                 && widget.getHeight() >= 20
                 && widget.getAbsoluteY() >= 330
-                && widget.getAbsoluteY() <= 510;
+                && widget.getAbsoluteY() <= 510
+                && widget.getAbsoluteX() >= 0
+                && widget.getAbsoluteX() <= 520;
+    }
+
+    private boolean clickChatboxAllFallback(APIContext ctx) {
+        WidgetChild chatBackground = ctx.widgets().get(
+                InterfaceID.CHATBOX,
+                childId(InterfaceID.Chatbox.CHAT_BACKGROUND)
+        );
+        if (!isVisibleWidget(chatBackground)) {
+            return false;
+        }
+
+        Point point = new Point(
+                chatBackground.getAbsoluteX() + chatBackground.getWidth() - 36,
+                chatBackground.getAbsoluteY() + 35
+        );
+        logInterfaceRecovery("Selecting Crafting quantity All by chatbox fallback point");
+        return ctx.mouse().click(point, false);
+    }
+
+    private boolean clickChatboxLeatherProductFallback(APIContext ctx, LeatherProduct product) {
+        WidgetChild chatBackground = ctx.widgets().get(
+                InterfaceID.CHATBOX,
+                childId(InterfaceID.Chatbox.CHAT_BACKGROUND)
+        );
+        if (!isVisibleWidget(chatBackground)) {
+            return false;
+        }
+
+        int index = productIndex(product);
+        if (index < 0) {
+            index = 0;
+        }
+
+        int x = chatBackground.getAbsoluteX() + 56 + (index * 86);
+        int maxX = chatBackground.getAbsoluteX() + chatBackground.getWidth() - 24;
+        Point point = new Point(
+                Math.min(x, maxX),
+                chatBackground.getAbsoluteY() + 82
+        );
+        logInterfaceRecovery("Clicking Crafting product by chatbox fallback point: " + product.name());
+        return ctx.mouse().click(point, false);
+    }
+
+    private int productIndex(LeatherProduct product) {
+        if (product == null) {
+            return -1;
+        }
+        for (int index = 0; index < PRODUCTS.length; index++) {
+            if (PRODUCTS[index].name().equals(product.name())) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     private boolean clearBlockingContinue(APIContext ctx) {
