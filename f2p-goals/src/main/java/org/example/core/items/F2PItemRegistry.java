@@ -18,7 +18,9 @@ public final class F2PItemRegistry {
 
         register(new ItemRule("Cowhide", false, false, 0, 0, false, false, true, 0));
         register(new ItemRule("Hard leather", false, false, 0, 0, false, false, true, 0));
-        register(new ItemRule("Leather", false, false, 0, 0, false, false, true, 0));
+        register(new ItemRule("Leather", false, false, 300, 0, false, false, true, 0));
+        register(new ItemRule("Needle", false, false, 100, 0, false, false, true, 0));
+        register(new ItemRule("Thread", false, false, 100, 0, false, true, true, 0));
         register(new ItemRule("Feather", false, false, 0, 0, false, true, true, 0));
         register(new ItemRule("Feathers", false, false, 0, 0, false, true, true, 0));
         register(new ItemRule("Shrimps", false, true, 0, 0, false, false, true, 0));
@@ -69,11 +71,12 @@ public final class F2PItemRegistry {
         registerOldGear("Shortbow", 30);
         registerOldGear("Oak shortbow", 70);
         registerOldGear("Willow shortbow", 120);
-        registerGear("Leather cowl", 300, 40);
-        registerGear("Leather body", 300, 40);
-        registerGear("Leather chaps", 300, 40);
-        registerGear("Leather vambraces", 300, 40);
-        registerGear("Leather boots", 250, 40);
+        registerRestrictedGear("Leather gloves", 100);
+        registerRestrictedGear("Leather cowl", 300);
+        registerRestrictedGear("Leather body", 300);
+        registerRestrictedGear("Leather chaps", 300);
+        registerRestrictedGear("Leather vambraces", 300);
+        registerRestrictedGear("Leather boots", 250);
         registerGear("Coif", 500, 120);
         registerGear("Studded body", 1_500, 600);
         registerGear("Studded chaps", 1_200, 500);
@@ -141,6 +144,10 @@ public final class F2PItemRegistry {
 
     private static void registerGear(String name, int buyPrice, int sellPrice) {
         register(new ItemRule(name, true, false, Math.max(1, buyPrice), Math.max(1, sellPrice), true, false, true, 0));
+    }
+
+    private static void registerRestrictedGear(String name, int buyPrice) {
+        register(new ItemRule(name, false, false, Math.max(1, buyPrice), 0, false, false, true, 0));
     }
 
     private static void register(ItemRule rule) {

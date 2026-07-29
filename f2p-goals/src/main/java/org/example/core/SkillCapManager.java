@@ -12,6 +12,8 @@ public class SkillCapManager {
     private static final int MAX_CAP = 35;
     private static final int RANGED_CAP = 30;
     private static final int MAGIC_CAP = 25;
+    private static final int MIN_CRAFTING_CAP = 25;
+    private static final int MAX_CRAFTING_CAP = 30;
 
     private final Map<Skill.Skills, Integer> caps = new EnumMap<>(Skill.Skills.class);
 
@@ -27,6 +29,7 @@ public class SkillCapManager {
         addRandomCap(Skill.Skills.COOKING);
         addRandomCap(Skill.Skills.MINING);
         addRandomCap(Skill.Skills.SMITHING);
+        caps.put(Skill.Skills.CRAFTING, randomCap(MIN_CRAFTING_CAP, MAX_CRAFTING_CAP));
     }
 
     public int capFor(Skill.Skills skill) {
@@ -52,7 +55,8 @@ public class SkillCapManager {
                 + ", Fishing " + capFor(Skill.Skills.FISHING)
                 + ", Cooking " + capFor(Skill.Skills.COOKING)
                 + ", Mining " + capFor(Skill.Skills.MINING)
-                + ", Smithing " + capFor(Skill.Skills.SMITHING);
+                + ", Smithing " + capFor(Skill.Skills.SMITHING)
+                + ", Crafting " + capFor(Skill.Skills.CRAFTING);
     }
 
     private void addRandomCap(Skill.Skills skill) {
@@ -60,6 +64,10 @@ public class SkillCapManager {
     }
 
     private int randomCap() {
-        return ThreadLocalRandom.current().nextInt(MIN_CAP, MAX_CAP + 1);
+        return randomCap(MIN_CAP, MAX_CAP);
+    }
+
+    private int randomCap(int minInclusive, int maxInclusive) {
+        return ThreadLocalRandom.current().nextInt(minInclusive, maxInclusive + 1);
     }
 }

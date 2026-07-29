@@ -24,6 +24,7 @@ import org.example.modules.magic.MagicSplashingModule;
 import org.example.modules.moneymaking.BeerGlassCollectorModule;
 import org.example.modules.questing.CookAssistantQuestModule;
 import org.example.modules.questing.RuneMysteriesQuestModule;
+import org.example.modules.skilling.CraftingModule;
 import org.example.modules.skilling.FishingCookingModule;
 import org.example.modules.skilling.MiningSmithingModule;
 import org.example.modules.skilling.WoodcuttingFiremakingModule;
@@ -35,7 +36,7 @@ import java.util.List;
 
 @ScriptManifest(name = "F2P Goals", gameType = GameType.OS)
 public class F2PGoalsScript extends Script {
-    private static final String SCRIPT_VERSION = "v0.4.211-cooks-egg-mining-ready";
+    private static final String SCRIPT_VERSION = "v0.4.212-crafting-only-test";
     private static final boolean QUEST_TEST_ONLY = false;
     private static final boolean RANGED_TEST_ONLY = false;
     private static final boolean MAGIC_TEST_ONLY = false;
@@ -43,6 +44,7 @@ public class F2PGoalsScript extends Script {
     private static final boolean FISHING_COOKING_TEST_ONLY = false;
     private static final boolean MINING_SMITHING_TEST_ONLY = false;
     private static final boolean MINING_SMITHING_BARS_TEST_ONLY = false;
+    private static final boolean CRAFTING_TEST_ONLY = true;
 
     private ScriptStats stats;
     private SkillCapManager skillCaps;
@@ -62,6 +64,11 @@ public class F2PGoalsScript extends Script {
                 stats,
                 skillCaps,
                 MINING_SMITHING_BARS_TEST_ONLY
+        );
+        CraftingModule craftingModule = new CraftingModule(
+                this::logInfo,
+                stats,
+                skillCaps
         );
         BeerGlassCollectorModule beerGlassCollectorModule = new BeerGlassCollectorModule(
                 this::logInfo,
@@ -101,6 +108,9 @@ public class F2PGoalsScript extends Script {
         } else if (MINING_SMITHING_TEST_ONLY) {
             managedModules = List.of(miningSmithingModule);
             fallbackModule = miningSmithingModule;
+        } else if (CRAFTING_TEST_ONLY) {
+            managedModules = List.of(craftingModule);
+            fallbackModule = craftingModule;
         } else {
             LumbridgeCowCombatModule combatModule = new LumbridgeCowCombatModule(this::logInfo, stats);
             LumbridgeCowCombatModule rangedCombatModule = new LumbridgeCowCombatModule(
@@ -116,6 +126,7 @@ public class F2PGoalsScript extends Script {
                     new WoodcuttingFiremakingModule(this::logInfo, stats, skillCaps),
                     fishingCookingModule,
                     miningSmithingModule,
+                    craftingModule,
                     beerGlassCollectorModule
             );
             fallbackModule = combatModule;
@@ -141,6 +152,9 @@ public class F2PGoalsScript extends Script {
             logInfo("Test mode enabled: "
                     + (MINING_SMITHING_BARS_TEST_ONLY ? "Bronze bars only" : "Mining/Smithing only"));
         }
+        if (CRAFTING_TEST_ONLY) {
+            logInfo("Test mode enabled: Crafting only");
+        }
         logInfo(skillCaps.describeCaps());
         GoalManagerModule goalManagerModule = new GoalManagerModule(
                 this::logInfo,
@@ -148,7 +162,8 @@ public class F2PGoalsScript extends Script {
                 managedModules,
                 fallbackModule
         );
-        List<RuntimeController> runtimeModules = QUEST_TEST_ONLY
+        boolean lightweightTestMode = QUEST_TEST_ONLY || CRAFTING_TEST_ONLY;
+        List<RuntimeController> runtimeModules = lightweightTestMode
                 ? List.of(
                         new LoopWatchdogController(this::logInfo, stats, SCRIPT_VERSION, goalManagerModule::requestReroll),
                         new CameraZoomController(this::logInfo)
@@ -302,7 +317,9 @@ public class F2PGoalsScript extends Script {
                 + " Min " + ctx.skills().get(com.epicbot.api.shared.model.Skill.Skills.MINING).getRealLevel()
                 + "/" + skillCaps.capFor(com.epicbot.api.shared.model.Skill.Skills.MINING)
                 + " Sm " + ctx.skills().get(com.epicbot.api.shared.model.Skill.Skills.SMITHING).getRealLevel()
-                + "/" + skillCaps.capFor(com.epicbot.api.shared.model.Skill.Skills.SMITHING);
+                + "/" + skillCaps.capFor(com.epicbot.api.shared.model.Skill.Skills.SMITHING)
+                + " Cr " + ctx.skills().get(com.epicbot.api.shared.model.Skill.Skills.CRAFTING).getRealLevel()
+                + "/" + skillCaps.capFor(com.epicbot.api.shared.model.Skill.Skills.CRAFTING);
     }
 
     private String meleeCapText(APIContext ctx) {
