@@ -33,9 +33,10 @@ public class CraftingModule extends AbstractSkillingModule {
     private static final int SKILLMULTI_FIRST_ITEM_CHILD = childId(InterfaceID.Skillmulti.A);
     private static final int LEVELUP_GROUP = InterfaceID.LEVELUP_DISPLAY;
     private static final int LEVELUP_CONTINUE_CHILD = childId(InterfaceID.LevelupDisplay.CONTINUE);
-    private static final int MIN_LEATHER_BATCH = 60;
-    private static final int MAX_LEATHER_BATCH = 140;
+    private static final int MIN_LEATHER_BATCH = 24;
+    private static final int MAX_LEATHER_BATCH = 32;
     private static final int THREAD_BATCH = 80;
+    private static final int CRAFTING_COIN_RESERVE = 800;
     private static final int CRAFTING_FUNDING_BUFFER_COINS = 450;
     private static final long GE_OFFER_CHECK_DELAY_MILLIS = 7_000L;
     private static final String[] CRAFTING_FUNDING_SAFE_SELL_ITEMS = F2PItemRegistry.fundingSellItems();
@@ -258,7 +259,7 @@ public class CraftingModule extends AbstractSkillingModule {
                 Time.sleep(600, 900);
                 return;
             }
-            planMaterialBuyFromBank(ctx, LEATHER, randomLeatherBuyQuantity());
+            planMaterialBuyFromBank(ctx, LEATHER, randomLeatherBuyQuantity(ctx));
             return;
         }
 
@@ -1073,8 +1074,19 @@ public class CraftingModule extends AbstractSkillingModule {
         return ctx.inventory().getCount(true, LEATHER);
     }
 
-    private int randomLeatherBuyQuantity() {
-        return ThreadLocalRandom.current().nextInt(MIN_LEATHER_BATCH, MAX_LEATHER_BATCH + 1);
+    private int randomLeatherBuyQuantity(APIContext ctx) {
+        int desired = ThreadLocalRandom.current().nextInt(MIN_LEATHER_BATCH, MAX_LEATHER_BATCH + 1);
+        int unitPrice = materialBuyPrice(ctx, LEATHER);
+        int spendableCoins = Math.max(0, knownCraftingFundingCoins(ctx) - CRAFTING_COIN_RESERVE);
+        if (unitPrice <= 0 || spendableCoins <= 0) {
+            return desired;
+        }
+
+        int affordable = Math.max(1, spendableCoins / unitPrice);
+        if (affordable < MIN_LEATHER_BATCH) {
+            return affordable;
+        }
+        return Math.min(desired, affordable);
     }
 
     private int materialBuyPrice(APIContext ctx, String itemName) {
