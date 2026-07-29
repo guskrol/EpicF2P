@@ -62,6 +62,8 @@ public class CraftingModule extends AbstractSkillingModule {
     private LeatherProduct pendingUnlockAwarenessProduct;
     private int pendingUnlockAwarenessBatches;
     private boolean craftingBatchActive;
+    private boolean craftingLevelUpRecoveryPending;
+    private int activeBatchCraftingLevel = -1;
     private int lastLeatherCount = -1;
     private long lastLeatherChangeAt;
     private long nextCraftingProgressLogAt;
@@ -108,7 +110,12 @@ public class CraftingModule extends AbstractSkillingModule {
         stats.startExperienceIfNeeded(ctx);
         stats.setTrainingSkill("Crafting");
 
+        detectCraftingLevelUpDuringBatch(ctx);
         if (clearBlockingContinue(ctx)) {
+            return;
+        }
+
+        if (handleCraftingLevelUpRecovery(ctx)) {
             return;
         }
 
@@ -178,6 +185,8 @@ public class CraftingModule extends AbstractSkillingModule {
             }
             if (clickLeatherProduct(ctx, product, allSelected)) {
                 craftingBatchActive = true;
+                craftingLevelUpRecoveryPending = false;
+                activeBatchCraftingLevel = level(ctx, Skill.Skills.CRAFTING);
                 rememberLeatherCount(ctx);
                 Time.sleep(
                         1800,
@@ -214,6 +223,57 @@ public class CraftingModule extends AbstractSkillingModule {
         Time.sleep(900, 1400);
     }
 
+    private void detectCraftingLevelUpDuringBatch(APIContext ctx) {
+        if (!craftingBatchActive || craftingLevelUpRecoveryPending || activeBatchCraftingLevel < 0) {
+            return;
+        }
+        if (leatherCount(ctx) <= 0) {
+            return;
+        }
+
+        int currentLevel = level(ctx, Skill.Skills.CRAFTING);
+        if (currentLevel > activeBatchCraftingLevel) {
+            craftingLevelUpRecoveryPending = true;
+            log("Crafting level-up detected during batch: "
+                    + activeBatchCraftingLevel + " -> " + currentLevel);
+        }
+    }
+
+    private boolean handleCraftingLevelUpRecovery(APIContext ctx) {
+        if (!craftingLevelUpRecoveryPending) {
+            return false;
+        }
+
+        if (leatherCount(ctx) <= 0) {
+            log("Crafting level-up recovery skipped; batch already consumed all Leather");
+            craftingLevelUpRecoveryPending = false;
+            finishCraftingBatch();
+            return true;
+        }
+
+        if (ctx.bank().isOpen()) {
+            log("Closing bank before restarting Crafting after level-up");
+            ctx.bank().close();
+            Time.sleep(500, 800, () -> !ctx.bank().isOpen(), 100);
+            return true;
+        }
+
+        if (ctx.grandExchange().isOpen()) {
+            log("Closing GE before restarting Crafting after level-up");
+            ctx.grandExchange().close();
+            Time.sleep(500, 800, () -> !ctx.grandExchange().isOpen(), 100);
+            return true;
+        }
+
+        log("Restarting leather Crafting after level-up with " + leatherCount(ctx) + " Leather");
+        craftingBatchActive = false;
+        craftingLevelUpRecoveryPending = false;
+        activeBatchCraftingLevel = -1;
+        lastLeatherCount = -1;
+        craftLeather(ctx);
+        return true;
+    }
+
     private boolean handleActiveCraftingBatch(APIContext ctx) {
         int leather = leatherCount(ctx);
         if (leather <= 0) {
@@ -242,6 +302,8 @@ public class CraftingModule extends AbstractSkillingModule {
 
         log("Crafting batch idle; reopening leather Crafting interface");
         craftingBatchActive = false;
+        craftingLevelUpRecoveryPending = false;
+        activeBatchCraftingLevel = -1;
         lastLeatherCount = -1;
         Time.sleep(500, 800);
         return false;
@@ -766,6 +828,8 @@ public class CraftingModule extends AbstractSkillingModule {
         }
 
         craftingBatchActive = false;
+        craftingLevelUpRecoveryPending = false;
+        activeBatchCraftingLevel = -1;
         lastLeatherCount = -1;
         activeProductBatchesLeft = Math.max(0, activeProductBatchesLeft - 1);
         if (pendingUnlockAwarenessBatches > 0) {
