@@ -31,6 +31,7 @@ import java.util.function.Consumer;
 public class MagicSplashingModule implements ManagedF2PModule {
     public static final int NORMAL_MAGIC_CAP = 13;
     public static final int FUTURE_SPLASH_CAP = 25;
+    private static final int MIN_DEFENCE_LEVEL = 15;
 
     private static final Spell NORMAL_SPELL = Spell.Modern.WIND_STRIKE;
     private static final Spell FIRE_SPLASH_SPELL = Spell.Modern.FIRE_STRIKE;
@@ -225,7 +226,8 @@ public class MagicSplashingModule implements ManagedF2PModule {
 
     @Override
     public boolean shouldExecute(APIContext ctx) {
-        return !isComplete(ctx);
+        return !isComplete(ctx)
+                && ctx.skills().get(Skill.Skills.DEFENCE).getRealLevel() >= MIN_DEFENCE_LEVEL;
     }
 
     @Override

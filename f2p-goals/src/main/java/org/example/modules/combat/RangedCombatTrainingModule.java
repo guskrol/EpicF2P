@@ -5,7 +5,7 @@ import com.epicbot.api.shared.model.Skill;
 import org.example.core.ManagedF2PModule;
 
 public class RangedCombatTrainingModule implements ManagedF2PModule {
-    private static final int MIN_DEFENCE_LEVEL = 20;
+    private static final int MIN_DEFENCE_LEVEL = 15;
 
     private final LumbridgeCowCombatModule combatModule;
 

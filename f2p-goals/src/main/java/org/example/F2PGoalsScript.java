@@ -36,7 +36,7 @@ import java.util.List;
 
 @ScriptManifest(name = "F2P Goals", gameType = GameType.OS)
 public class F2PGoalsScript extends Script {
-    private static final String SCRIPT_VERSION = "v0.4.218-crafting-levelup-resume-test";
+    private static final String SCRIPT_VERSION = "v0.4.219-full-crafting-ranged-magic";
     private static final boolean QUEST_TEST_ONLY = false;
     private static final boolean RANGED_TEST_ONLY = false;
     private static final boolean MAGIC_TEST_ONLY = false;
@@ -44,7 +44,7 @@ public class F2PGoalsScript extends Script {
     private static final boolean FISHING_COOKING_TEST_ONLY = false;
     private static final boolean MINING_SMITHING_TEST_ONLY = false;
     private static final boolean MINING_SMITHING_BARS_TEST_ONLY = false;
-    private static final boolean CRAFTING_TEST_ONLY = true;
+    private static final boolean CRAFTING_TEST_ONLY = false;
 
     private ScriptStats stats;
     private SkillCapManager skillCaps;

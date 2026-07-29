@@ -69,7 +69,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private static final int EAT_AT_HEALTH_PERCENT = 55;
     private static final int RETREAT_AT_HEALTH_PERCENT = 1;
     private static final int RESUME_AT_HEALTH_PERCENT = 85;
-    private static final int MIN_DEFENCE_FOR_RANGED = 20;
+    private static final int MIN_DEFENCE_FOR_RANGED = 15;
     private static final int MIN_RANGED_ARROWS_EQUIPPED = 50;
     private static final int MIN_RANGED_ARROW_PURCHASE = 200;
     public static final int RANGED_TRAINING_CAP = 30;
