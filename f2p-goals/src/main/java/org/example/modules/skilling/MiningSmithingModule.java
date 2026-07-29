@@ -21,7 +21,7 @@ import java.util.function.Consumer;
 
 public class MiningSmithingModule extends AbstractSkillingModule {
     private static final Area LUMBRIDGE_SWAMP_MINE_SEARCH = new Area(3220, 3144, 3234, 3159);
-    private static final Area LUMBRIDGE_SWAMP_MINE_WORK_AREA = new Area(3222, 3146, 3231, 3156);
+    private static final Area LUMBRIDGE_SWAMP_MINE_WORK_AREA = new Area(3220, 3144, 3234, 3159);
     private static final Tile LUMBRIDGE_SWAMP_MINE_CENTER = new Tile(3226, 3146, 0);
     private static final Area AL_KHARID_REGION = new Area(3250, 3130, 3310, 3205);
     private static final int FURNACE_ID = 24009;
@@ -347,20 +347,25 @@ public class MiningSmithingModule extends AbstractSkillingModule {
 
     private boolean walkToSwampMineCenter(APIContext ctx) {
         Tile location = ctx.localPlayer().getLocation();
-        if (location != null && LUMBRIDGE_SWAMP_MINE_WORK_AREA.contains(location)) {
+        if (isAtSwampMineWorkArea(location)) {
             return false;
         }
 
-        log("Walking to Lumbridge swamp mine center: " + tileText(LUMBRIDGE_SWAMP_MINE_CENTER));
+        log("Walking to Lumbridge swamp mine center: " + tileText(LUMBRIDGE_SWAMP_MINE_CENTER)
+                + " from " + tileText(location));
         org.example.core.navigation.Navigation.walkTo(ctx, LUMBRIDGE_SWAMP_MINE_CENTER);
         Time.sleep(
-                1200,
                 1800,
-                () -> LUMBRIDGE_SWAMP_MINE_WORK_AREA.contains(ctx.localPlayer().getLocation())
-                        || ctx.localPlayer().isMoving(),
+                3200,
+                () -> isAtSwampMineWorkArea(ctx.localPlayer().getLocation())
+                        || !ctx.localPlayer().isMoving(),
                 100
         );
         return true;
+    }
+
+    private boolean isAtSwampMineWorkArea(Tile location) {
+        return location != null && LUMBRIDGE_SWAMP_MINE_WORK_AREA.contains(location);
     }
 
     private boolean moveCloserToRock(APIContext ctx, SceneObject rock, Tile rockTile) {

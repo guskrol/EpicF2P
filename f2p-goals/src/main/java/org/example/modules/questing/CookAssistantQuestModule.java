@@ -8,6 +8,7 @@ import com.epicbot.api.shared.entity.details.Locatable;
 import com.epicbot.api.shared.entity.WidgetChild;
 import com.epicbot.api.shared.methods.IQuestAPI;
 import com.epicbot.api.shared.model.Area;
+import com.epicbot.api.shared.model.Tile;
 import com.epicbot.api.shared.util.time.Time;
 import com.epicbot.api.shared.webwalking.model.WalkState;
 import org.example.core.ManagedF2PModule;
@@ -23,9 +24,11 @@ import java.util.function.Consumer;
 
 public class CookAssistantQuestModule implements ManagedF2PModule {
     private static final Area COOK_AREA = new Area(3205, 3211, 3213, 3218);
-    private static final Area EGG_AREA = new Area(3225, 3294, 3237, 3302);
+    private static final Area EGG_AREA = new Area(3223, 3292, 3240, 3306);
     private static final Area DAIRY_COW_AREA = new Area(3253, 3267, 3267, 3282);
     private static final Area GE_AREA = new Area(3160, 3478, 3175, 3490);
+    private static final int EGG_SEARCH_DISTANCE = 18;
+    private static final int EGG_REPOSITION_AFTER_MISSES = 3;
     private static final int DAIRY_COW_ID = 1172;
 
     private static final String EGG = "Egg";
@@ -49,8 +52,10 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
     private long nextRecoveryLogAt;
     private long nextGeCollectAt;
     private long nextStaleDialogueLogAt;
+    private long nextEggDebugAt;
     private boolean bankChecked;
     private int bankWalkFailures;
+    private int consecutiveEggMisses;
 
     public CookAssistantQuestModule(Consumer<String> logger, ScriptStats stats) {
         this.logger = logger;
@@ -295,7 +300,7 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
 
     private boolean collectSimpleWorldIngredient(APIContext ctx) {
         if (!ctx.inventory().contains(EGG)) {
-            return collectGroundIngredient(ctx, EGG, EGG_AREA);
+            return collectEgg(ctx);
         }
 
         if (!ctx.inventory().contains(BUCKET_OF_MILK) && ctx.inventory().contains(BUCKET)) {
@@ -305,36 +310,136 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
         return false;
     }
 
-    private boolean collectGroundIngredient(APIContext ctx, String itemName, Area area) {
-        if (!area.contains(ctx.localPlayer().getLocation())) {
-            stats.setStatus("Cook's Assistant: walking to " + itemName);
-            logTravel("Cook's Assistant: walking to " + itemName + " area");
-            walkSafelyTo(ctx, area.getRandomTile(), itemName + " area");
+    private boolean collectEgg(APIContext ctx) {
+        if (ctx.localPlayer().isMoving() || ctx.localPlayer().isAnimating() || ctx.localPlayer().isInCombat()) {
+            Time.sleep(500, 800);
+            return true;
+        }
+
+        if (!EGG_AREA.contains(ctx.localPlayer().getLocation())) {
+            stats.setStatus("Cook's Assistant: walking to Egg");
+            logTravel("Cook's Assistant: walking to chicken coop for Egg");
+            walkSafelyTo(ctx, EGG_AREA.getRandomTile(), "chicken coop Egg area");
             Time.sleep(700, 1100);
             return true;
         }
 
-        GroundItem item = ctx.groundItems()
-                .query()
-                .named(itemName)
-                .actions("Take")
-                .within(area)
-                .results()
-                .nearest();
+        GroundItem item = findGroundIngredient(ctx, EGG, EGG_AREA, EGG_SEARCH_DISTANCE);
 
         if (item == null || !item.isValid()) {
-            logRecovery("Cook's Assistant: no " + itemName + " found on ground yet");
+            consecutiveEggMisses++;
+            debugNearbyGroundItems(ctx, EGG, EGG_AREA);
+            logRecovery("Cook's Assistant: no Egg found on ground yet (miss "
+                    + consecutiveEggMisses + ")");
+            if (consecutiveEggMisses >= EGG_REPOSITION_AFTER_MISSES) {
+                stats.setStatus("Cook's Assistant: repositioning for Egg spawn");
+                logTravel("Cook's Assistant: repositioning inside chicken coop for Egg spawn");
+                walkSafelyTo(ctx, EGG_AREA.getRandomTile(), "chicken coop Egg spawn");
+                consecutiveEggMisses = 0;
+            }
             Time.sleep(700, 1100);
             return true;
         }
 
-        stats.setStatus("Cook's Assistant: taking " + itemName);
-        log("Cook's Assistant: taking " + itemName);
-        if (item.interact("Take")) {
-            Time.sleep(900, 1500, () -> ctx.inventory().contains(itemName), 100);
+        if (item.tileDistanceTo(ctx) > 8) {
+            stats.setStatus("Cook's Assistant: moving closer to Egg");
+            logTravel("Cook's Assistant: moving closer to Egg at " + item.getLocation());
+            walkSafelyTo(ctx, item.getLocation(), "Egg");
+            Time.sleep(700, 1100);
+            return true;
+        }
+
+        int before = ctx.inventory().getCount(true, EGG);
+        stats.setStatus("Cook's Assistant: taking Egg");
+        log("Cook's Assistant: taking Egg at " + item.getLocation());
+        ctx.camera().turnTo(item);
+        if (item.interact("Take", EGG) || item.interact("Take") || ctx.menu().interact("Take", item, false)) {
+            Time.sleep(900, 1500, () -> ctx.inventory().getCount(true, EGG) > before, 100);
+            consecutiveEggMisses = 0;
             bankChecked = false;
+        } else {
+            logRecovery("Cook's Assistant: failed to interact Take on Egg at " + item.getLocation());
         }
         return true;
+    }
+
+    private GroundItem findGroundIngredient(APIContext ctx, String itemName, Area area, int maxDistance) {
+        for (GroundItem item : ctx.groundItems()
+                .query()
+                .named(itemName)
+                .within(area)
+                .results()
+                .nearestList()) {
+            if (isValidGroundIngredient(ctx, item, itemName, area, maxDistance)) {
+                return item;
+            }
+        }
+
+        for (GroundItem item : ctx.groundItems()
+                .query()
+                .named(itemName)
+                .results()
+                .nearestList()) {
+            if (isValidGroundIngredient(ctx, item, itemName, area, maxDistance)) {
+                return item;
+            }
+        }
+
+        return null;
+    }
+
+    private boolean isValidGroundIngredient(
+            APIContext ctx,
+            GroundItem item,
+            String itemName,
+            Area area,
+            int maxDistance
+    ) {
+        if (item == null || !item.isValid() || !namesMatch(item.getName(), itemName)) {
+            return false;
+        }
+
+        Tile itemTile = item.getLocation();
+        return item.tileDistanceTo(ctx) <= maxDistance
+                && (itemTile == null || area.contains(itemTile) || area.contains(ctx.localPlayer().getLocation()));
+    }
+
+    private void debugNearbyGroundItems(APIContext ctx, String itemName, Area area) {
+        long now = System.currentTimeMillis();
+        if (now < nextEggDebugAt) {
+            return;
+        }
+
+        StringBuilder builder = new StringBuilder("Cook's Assistant ground item debug for ")
+                .append(itemName)
+                .append(":");
+        int inspected = 0;
+        for (GroundItem item : ctx.groundItems().query().results().nearestList()) {
+            if (item == null || !item.isValid()) {
+                continue;
+            }
+            Tile tile = item.getLocation();
+            if (item.tileDistanceTo(ctx) > EGG_SEARCH_DISTANCE
+                    && (tile == null || !area.contains(tile))) {
+                continue;
+            }
+            builder.append(" [")
+                    .append(item.getName())
+                    .append(" at ")
+                    .append(tile)
+                    .append(", dist=")
+                    .append(item.tileDistanceTo(ctx))
+                    .append(']');
+            inspected++;
+            if (inspected >= 8) {
+                break;
+            }
+        }
+        if (inspected == 0) {
+            builder.append(" none nearby");
+        }
+        logRecovery(builder.toString());
+        nextEggDebugAt = now + 10_000L;
     }
 
     private boolean milkDairyCow(APIContext ctx) {
@@ -865,6 +970,14 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
                 || lower.contains("not right now")
                 || lower.contains("don't")
                 || lower.contains("do not");
+    }
+
+    private boolean namesMatch(String left, String right) {
+        return normalizedName(left).equals(normalizedName(right));
+    }
+
+    private String normalizedName(String value) {
+        return value == null ? "" : value.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
     }
 
     private void logTravel(String message) {
