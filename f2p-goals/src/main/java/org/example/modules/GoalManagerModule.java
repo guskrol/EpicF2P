@@ -11,13 +11,16 @@ import org.example.core.navigation.Navigation;
 import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
 
 public class GoalManagerModule implements F2PModule {
     private static final long MIN_GOAL_WINDOW_MILLIS = 60 * 60 * 1000L;
     private static final long MAX_GOAL_WINDOW_MILLIS = 90 * 60 * 1000L;
+    private static final long WATCHDOG_REROLL_COOLDOWN_MILLIS = 15 * 60_000L;
 
     private final Consumer<String> logger;
     private final ScriptStats stats;
@@ -29,6 +32,9 @@ public class GoalManagerModule implements F2PModule {
     private boolean inventoryCleanupPending = true;
     private String inventoryCleanupTarget = "initial goal";
     private int inventoryCleanupDepositAttempts;
+    private final Map<String, Long> watchdogCooldowns = new HashMap<>();
+    private boolean watchdogRerollRequested;
+    private String watchdogRerollReason;
 
     public GoalManagerModule(
             Consumer<String> logger,
@@ -52,8 +58,19 @@ public class GoalManagerModule implements F2PModule {
         return true;
     }
 
+    public void requestReroll(String reason) {
+        watchdogRerollRequested = true;
+        watchdogRerollReason = reason == null || reason.isBlank()
+                ? "Loop watchdog requested task reroll"
+                : reason;
+    }
+
     @Override
     public void execute(APIContext ctx) {
+        if (watchdogRerollRequested) {
+            handleWatchdogReroll(ctx);
+        }
+
         boolean timedOut = activeModule != null && System.currentTimeMillis() >= activeUntil;
         boolean completed = activeModule != null && activeModule.isComplete(ctx);
         if (completed && closeCompletedGoalScreen(ctx, activeModule)) {
@@ -127,17 +144,26 @@ public class GoalManagerModule implements F2PModule {
     private void chooseNextGoal(APIContext ctx, boolean avoidPreviousAfterTimeout) {
         ManagedF2PModule previous = activeModule;
         activeModule = null;
+        expireWatchdogCooldowns();
 
         List<ManagedF2PModule> candidates = new ArrayList<>();
+        boolean skippedCooldownCandidate = false;
         for (ManagedF2PModule module : skillingModules) {
             if (!module.isComplete(ctx) && module.shouldExecute(ctx)) {
+                if (isOnWatchdogCooldown(module)) {
+                    skippedCooldownCandidate = true;
+                    continue;
+                }
                 candidates.add(module);
             }
         }
 
         if (candidates.isEmpty()) {
             stats.clearGoal();
-            if (previous != null) {
+            if (skippedCooldownCandidate) {
+                log("No managed goals outside watchdog cooldown. Falling back to combat/money making");
+                markInventoryCleanupPending("combat/money making");
+            } else if (previous != null) {
                 log("All managed goal caps reached. Falling back to combat/money making");
                 markInventoryCleanupPending("combat/money making");
             }
@@ -171,6 +197,41 @@ public class GoalManagerModule implements F2PModule {
         if (previous != activeModule || avoidPreviousAfterTimeout) {
             log(selectionLog(ctx, activeModule, goalWindowMillis, skippedPrevious, previous));
         }
+    }
+
+    private void handleWatchdogReroll(APIContext ctx) {
+        String reason = watchdogRerollReason == null || watchdogRerollReason.isBlank()
+                ? "Loop watchdog requested task reroll"
+                : watchdogRerollReason;
+        watchdogRerollRequested = false;
+        watchdogRerollReason = null;
+
+        ManagedF2PModule previous = activeModule;
+        if (previous != null) {
+            long cooldownUntil = System.currentTimeMillis() + WATCHDOG_REROLL_COOLDOWN_MILLIS;
+            watchdogCooldowns.put(previous.name(), cooldownUntil);
+            log("Watchdog recovery: rerolling from " + displayGoalName(previous.name())
+                    + " for ~" + (WATCHDOG_REROLL_COOLDOWN_MILLIS / 60_000L)
+                    + " min; reason=" + reason);
+        } else {
+            log("Watchdog recovery: reroll requested while fallback was active; reason=" + reason);
+        }
+
+        chooseNextGoal(ctx, true);
+        String nextTarget = activeModule == null
+                ? displayGoalName(fallbackModule.name())
+                : displayGoalName(activeModule.name());
+        markInventoryCleanupPending(nextTarget);
+    }
+
+    private void expireWatchdogCooldowns() {
+        long now = System.currentTimeMillis();
+        watchdogCooldowns.entrySet().removeIf(entry -> entry.getValue() <= now);
+    }
+
+    private boolean isOnWatchdogCooldown(ManagedF2PModule module) {
+        Long cooldownUntil = watchdogCooldowns.get(module.name());
+        return cooldownUntil != null && cooldownUntil > System.currentTimeMillis();
     }
 
     private boolean ensureCleanInventoryBeforeGoal(APIContext ctx, String goalName) {

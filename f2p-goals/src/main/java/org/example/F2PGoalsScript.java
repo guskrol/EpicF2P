@@ -35,7 +35,7 @@ import java.util.List;
 
 @ScriptManifest(name = "F2P Goals", gameType = GameType.OS)
 public class F2PGoalsScript extends Script {
-    private static final String SCRIPT_VERSION = "v0.4.207-lower-ranged-magic-caps";
+    private static final String SCRIPT_VERSION = "v0.4.209-watchdog-reroll-mining-tile";
     private static final boolean QUEST_TEST_ONLY = false;
     private static final boolean RANGED_TEST_ONLY = false;
     private static final boolean MAGIC_TEST_ONLY = false;
@@ -142,13 +142,19 @@ public class F2PGoalsScript extends Script {
                     + (MINING_SMITHING_BARS_TEST_ONLY ? "Bronze bars only" : "Mining/Smithing only"));
         }
         logInfo(skillCaps.describeCaps());
+        GoalManagerModule goalManagerModule = new GoalManagerModule(
+                this::logInfo,
+                stats,
+                managedModules,
+                fallbackModule
+        );
         List<RuntimeController> runtimeModules = QUEST_TEST_ONLY
                 ? List.of(
-                        new LoopWatchdogController(this::logInfo, stats, SCRIPT_VERSION),
+                        new LoopWatchdogController(this::logInfo, stats, SCRIPT_VERSION, goalManagerModule::requestReroll),
                         new CameraZoomController(this::logInfo)
                 )
                 : List.of(
-                        new LoopWatchdogController(this::logInfo, stats, SCRIPT_VERSION),
+                        new LoopWatchdogController(this::logInfo, stats, SCRIPT_VERSION, goalManagerModule::requestReroll),
                         new CameraZoomController(this::logInfo),
                         BreakController.normal(this::logInfo, stats),
                         BreakController.micro(this::logInfo, stats),
@@ -159,12 +165,7 @@ public class F2PGoalsScript extends Script {
                 this::getAPIContext,
                 this::logInfo,
                 runtimeModules,
-                List.of(new GoalManagerModule(
-                        this::logInfo,
-                        stats,
-                        managedModules,
-                        fallbackModule
-                ))
+                List.of(goalManagerModule)
         ));
         return true;
     }

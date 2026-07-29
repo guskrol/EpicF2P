@@ -31,6 +31,7 @@ public class LoopWatchdogController implements RuntimeController {
     private final Consumer<String> logger;
     private final ScriptStats stats;
     private final String scriptVersion;
+    private final Consumer<String> recoveryHandler;
     private final long startedAt = System.currentTimeMillis();
     private Snapshot lastProgressSnapshot;
     private String lastStatus;
@@ -48,9 +49,19 @@ public class LoopWatchdogController implements RuntimeController {
     }
 
     public LoopWatchdogController(Consumer<String> logger, ScriptStats stats, String scriptVersion) {
+        this(logger, stats, scriptVersion, null);
+    }
+
+    public LoopWatchdogController(
+            Consumer<String> logger,
+            ScriptStats stats,
+            String scriptVersion,
+            Consumer<String> recoveryHandler
+    ) {
         this.logger = logger;
         this.stats = stats;
         this.scriptVersion = scriptVersion == null || scriptVersion.isBlank() ? "unknown" : scriptVersion;
+        this.recoveryHandler = recoveryHandler;
         resetThresholds();
     }
 
@@ -124,11 +135,34 @@ public class LoopWatchdogController implements RuntimeController {
     @Override
     public void execute(APIContext ctx) {
         String reason = pendingStopReason == null ? "Loop watchdog triggered" : pendingStopReason;
-        stats.setStatus(reason);
         logger.accept("[Watchdog] " + reason);
         saveReport(ctx, reason);
+        if (requestRecoveryInsteadOfStop(ctx, reason)) {
+            return;
+        }
+
+        stats.setStatus(reason);
         Time.sleep(600, 900);
         ctx.script().stop(reason);
+    }
+
+    private boolean requestRecoveryInsteadOfStop(APIContext ctx, String reason) {
+        if (recoveryHandler == null) {
+            return false;
+        }
+
+        try {
+            recoveryHandler.accept(reason);
+            stats.setStatus("Loop watchdog recovery: rerolling task");
+            logger.accept("[Watchdog] Recovery requested; rerolling task instead of stopping script");
+            initialize(System.currentTimeMillis(), Snapshot.capture(ctx, stats));
+            Time.sleep(1200, 1800);
+            return true;
+        } catch (RuntimeException recoveryFailure) {
+            logger.accept("[Watchdog] Recovery request failed; stopping script: "
+                    + recoveryFailure.getClass().getSimpleName() + ": " + recoveryFailure.getMessage());
+            return false;
+        }
     }
 
     private void initialize(long now, Snapshot snapshot) {

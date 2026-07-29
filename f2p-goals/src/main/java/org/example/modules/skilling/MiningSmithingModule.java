@@ -19,7 +19,9 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
 
 public class MiningSmithingModule extends AbstractSkillingModule {
-    private static final Area LUMBRIDGE_SWAMP_MINE = new Area(3220, 3144, 3234, 3159);
+    private static final Area LUMBRIDGE_SWAMP_MINE_SEARCH = new Area(3220, 3144, 3234, 3159);
+    private static final Area LUMBRIDGE_SWAMP_MINE_WORK_AREA = new Area(3222, 3146, 3231, 3156);
+    private static final Tile LUMBRIDGE_SWAMP_MINE_CENTER = new Tile(3226, 3146, 0);
     private static final Area AL_KHARID_REGION = new Area(3250, 3130, 3310, 3205);
     private static final int FURNACE_ID = 24009;
     private static final int AL_KHARID_GATE_COINS = 10;
@@ -55,6 +57,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
     };
     private static final long FAILED_ROCK_AVOID_MILLIS = 12_000L;
     private static final long ROCK_DEBUG_LOG_INTERVAL_MILLIS = 15_000L;
+    private static final int MINING_ROCK_INTERACT_DISTANCE = 4;
     private static final String COPPER_ORE = "Copper ore";
     private static final String TIN_ORE = "Tin ore";
     private static final String BRONZE_BAR = "Bronze bar";
@@ -206,7 +209,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
             return true;
         }
 
-        if (ctx.bank().isOpen() || !LUMBRIDGE_SWAMP_MINE.contains(ctx.localPlayer().getLocation())) {
+        if (ctx.bank().isOpen() || !LUMBRIDGE_SWAMP_MINE_SEARCH.contains(ctx.localPlayer().getLocation())) {
             log("Banking partial copper/tin ores before continuing Mining");
             bankOres(ctx);
             return true;
@@ -247,7 +250,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
             return;
         }
 
-        if (walkTo(ctx, LUMBRIDGE_SWAMP_MINE, "Lumbridge swamp mine")) {
+        if (walkToSwampMineCenter(ctx)) {
             return;
         }
 
@@ -261,6 +264,10 @@ public class MiningSmithingModule extends AbstractSkillingModule {
 
         int beforeOres = oreCount(ctx);
         Tile rockTile = rock.getLocation();
+        if (moveCloserToRock(ctx, rock, rockTile)) {
+            return;
+        }
+
         log("Mining " + rock.getName() + " id=" + rock.getId()
                 + " for " + preferredOre.label + " balance until inventory full: "
                 + ctx.inventory().getCount() + "/28");
@@ -284,7 +291,14 @@ public class MiningSmithingModule extends AbstractSkillingModule {
             if (stats.consumeRecentMiningNoOreMessage()) {
                 rememberFailedRock(rockTile);
             }
+            return;
         }
+
+        log("Could not click mining rock at " + tileText(rockTile) + "; moving closer before retry");
+        if (rockTile != null) {
+            org.example.core.navigation.Navigation.walkTo(ctx, rockTile);
+        }
+        Time.sleep(1200, 1800);
     }
 
     private SceneObject findMineableRock(APIContext ctx, OreKind preferredOre) {
@@ -293,7 +307,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
         List<SceneObject> actionRocks = filterMineableRocks(ctx.objects()
                 .query()
                 .filter(rock -> rock != null && isLoadedOreRockId(rock.getId()))
-                .within(LUMBRIDGE_SWAMP_MINE)
+                .within(LUMBRIDGE_SWAMP_MINE_SEARCH)
                 .reachable()
                 .results()
                 .nearestList());
@@ -307,7 +321,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
                 .query()
                 .nameContains("Tin rocks", "Copper rocks", "Tin", "Copper")
                 .actions("Mine")
-                .within(LUMBRIDGE_SWAMP_MINE)
+                .within(LUMBRIDGE_SWAMP_MINE_SEARCH)
                 .reachable()
                 .results()
                 .nearestList());
@@ -323,11 +337,53 @@ public class MiningSmithingModule extends AbstractSkillingModule {
                         && !isDepletedOreRockId(rock.getId())
                         && (isLoadedOreRockId(rock.getId())
                         || nameLooksLikeOreRock(rock.getName())))
-                .within(LUMBRIDGE_SWAMP_MINE)
+                .within(LUMBRIDGE_SWAMP_MINE_SEARCH)
                 .results()
                 .nearestList());
         logRockDebug(ctx, anyAreaRock);
         return randomNearbyRock(anyAreaRock, preferredOre);
+    }
+
+    private boolean walkToSwampMineCenter(APIContext ctx) {
+        Tile location = ctx.localPlayer().getLocation();
+        if (location != null && LUMBRIDGE_SWAMP_MINE_WORK_AREA.contains(location)) {
+            return false;
+        }
+
+        log("Walking to Lumbridge swamp mine center: " + tileText(LUMBRIDGE_SWAMP_MINE_CENTER));
+        org.example.core.navigation.Navigation.walkTo(ctx, LUMBRIDGE_SWAMP_MINE_CENTER);
+        Time.sleep(
+                1200,
+                1800,
+                () -> LUMBRIDGE_SWAMP_MINE_WORK_AREA.contains(ctx.localPlayer().getLocation())
+                        || ctx.localPlayer().isMoving(),
+                100
+        );
+        return true;
+    }
+
+    private boolean moveCloserToRock(APIContext ctx, SceneObject rock, Tile rockTile) {
+        if (rock == null || rockTile == null || rock.tileDistanceTo(ctx) <= MINING_ROCK_INTERACT_DISTANCE) {
+            return false;
+        }
+
+        log("Moving closer to mining rock at " + tileText(rockTile) + " before clicking");
+        org.example.core.navigation.Navigation.walkTo(ctx, rockTile);
+        Time.sleep(
+                1200,
+                1800,
+                () -> rock.tileDistanceTo(ctx) <= MINING_ROCK_INTERACT_DISTANCE
+                        || ctx.localPlayer().isMoving(),
+                100
+        );
+        return true;
+    }
+
+    private String tileText(Tile tile) {
+        if (tile == null) {
+            return "?";
+        }
+        return tile.getX() + "," + tile.getY() + "," + tile.getPlane();
     }
 
     private List<SceneObject> filterMineableRocks(List<SceneObject> rocks) {
@@ -470,7 +526,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
                         && (isLoadedOreRockId(rock.getId())
                         || isDepletedOreRockId(rock.getId())
                         || nameLooksLikeOreRock(rock.getName())))
-                .within(LUMBRIDGE_SWAMP_MINE)
+                .within(LUMBRIDGE_SWAMP_MINE_SEARCH)
                 .results()
                 .nearestList();
 
