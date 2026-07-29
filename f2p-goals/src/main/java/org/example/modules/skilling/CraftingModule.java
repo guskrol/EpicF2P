@@ -39,6 +39,7 @@ public class CraftingModule extends AbstractSkillingModule {
     private static final int CRAFTING_COIN_RESERVE = 800;
     private static final int CRAFTING_FUNDING_BUFFER_COINS = 450;
     private static final long GE_OFFER_CHECK_DELAY_MILLIS = 7_000L;
+    private static final long CRAFTING_BATCH_IDLE_TIMEOUT_MILLIS = 14_000L;
     private static final String[] CRAFTING_FUNDING_SAFE_SELL_ITEMS = F2PItemRegistry.fundingSellItems();
     private static final String[] CRAFTING_FUNDING_SALE_KEEP_ITEMS = {
             NEEDLE,
@@ -131,7 +132,11 @@ public class CraftingModule extends AbstractSkillingModule {
             return;
         }
 
-        if (hasCraftingProducts(ctx) && (ctx.inventory().isFull() || leatherCount(ctx) == 0)) {
+        if (craftingBatchActive && handleActiveCraftingBatch(ctx)) {
+            return;
+        }
+
+        if (hasCraftingProducts(ctx) && leatherCount(ctx) == 0) {
             openBankForCrafting(ctx, "depositing crafted leather items");
             Time.sleep(900, 1400);
             return;
@@ -167,10 +172,11 @@ public class CraftingModule extends AbstractSkillingModule {
         }
 
         if (craftingInterfaceOpen(ctx, product)) {
-            if (selectCraftingAllQuantity(ctx)) {
+            boolean allSelected = selectCraftingAllQuantity(ctx);
+            if (allSelected) {
                 Time.sleep(250, 550);
             }
-            if (clickLeatherProduct(ctx, product)) {
+            if (clickLeatherProduct(ctx, product, allSelected)) {
                 craftingBatchActive = true;
                 rememberLeatherCount(ctx);
                 Time.sleep(
@@ -208,7 +214,47 @@ public class CraftingModule extends AbstractSkillingModule {
         Time.sleep(900, 1400);
     }
 
+    private boolean handleActiveCraftingBatch(APIContext ctx) {
+        int leather = leatherCount(ctx);
+        if (leather <= 0) {
+            log("Leather Crafting batch finished");
+            finishCraftingBatch();
+            Time.sleep(450, 800);
+            return true;
+        }
+
+        trackCraftingProgress(ctx);
+        long now = System.currentTimeMillis();
+        long idleFor = lastLeatherChangeAt <= 0L ? 0L : now - lastLeatherChangeAt;
+        if (ctx.localPlayer().isMoving()
+                || ctx.localPlayer().isAnimating()
+                || idleFor < CRAFTING_BATCH_IDLE_TIMEOUT_MILLIS) {
+            Time.sleep(
+                    900,
+                    1400,
+                    () -> leatherCount(ctx) != leather
+                            || ctx.localPlayer().isAnimating()
+                            || ctx.dialogues().canContinue(),
+                    100
+            );
+            return true;
+        }
+
+        log("Crafting batch idle; reopening leather Crafting interface");
+        craftingBatchActive = false;
+        lastLeatherCount = -1;
+        Time.sleep(500, 800);
+        return false;
+    }
+
     private void handleBank(APIContext ctx) {
+        if (craftingBatchActive && leatherCount(ctx) > 0) {
+            log("Closing bank; Leather Crafting batch still has " + leatherCount(ctx) + " Leather");
+            ctx.bank().close();
+            Time.sleep(500, 800, () -> !ctx.bank().isOpen(), 100);
+            return;
+        }
+
         if (hasCraftingProducts(ctx)) {
             log("Depositing crafted leather products");
             for (LeatherProduct product : PRODUCTS) {
@@ -840,7 +886,7 @@ public class CraftingModule extends AbstractSkillingModule {
                 || hasVisibleWidgetText(ctx, "Choose a quantity");
     }
 
-    private boolean clickLeatherProduct(APIContext ctx, LeatherProduct product) {
+    private boolean clickLeatherProduct(APIContext ctx, LeatherProduct product, boolean allowDefaultClick) {
         WidgetChild widget = findLeatherProductWidget(ctx, product);
         if (widget == null) {
             logInterfaceRecovery("Leather product widget not found: " + product.name());
@@ -848,11 +894,7 @@ public class CraftingModule extends AbstractSkillingModule {
         }
 
         log("Clicking Crafting product: " + product.name());
-        if (clickWidgetCenter(ctx, widget) || clickWidget(ctx, widget)) {
-            return true;
-        }
-
-        String[] actions = {"Make All", "Make-all", "Craft All", "Craft-all", "All", "Make", "Craft"};
+        String[] actions = {"Make All", "Make-all", "Craft All", "Craft-all", "All"};
         for (String action : actions) {
             if (widget.interact(action, product.name())
                     || widget.interact(action)
@@ -860,6 +902,14 @@ public class CraftingModule extends AbstractSkillingModule {
                     || ctx.menu().interact(action, widget, true)) {
                 return true;
             }
+        }
+
+        if (allowDefaultClick && (clickWidgetCenter(ctx, widget) || clickWidget(ctx, widget))) {
+            return true;
+        }
+
+        if (!allowDefaultClick) {
+            logInterfaceRecovery("Crafting All quantity not confirmed for " + product.name());
         }
         return false;
     }
