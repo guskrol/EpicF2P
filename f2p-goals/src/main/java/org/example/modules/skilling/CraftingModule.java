@@ -4,10 +4,13 @@ import com.epicbot.api.gameval.InterfaceID;
 import com.epicbot.api.shared.APIContext;
 import com.epicbot.api.shared.entity.ItemWidget;
 import com.epicbot.api.shared.entity.WidgetChild;
+import com.epicbot.api.shared.methods.IBankAPI;
 import com.epicbot.api.shared.model.Skill;
 import com.epicbot.api.shared.util.time.Time;
 import org.example.core.ScriptStats;
 import org.example.core.SkillCapManager;
+import org.example.core.funding.FundingPlanner;
+import org.example.core.items.F2PItemRegistry;
 import org.example.core.items.GePricing;
 import org.example.core.navigation.Navigation;
 
@@ -33,7 +36,15 @@ public class CraftingModule extends AbstractSkillingModule {
     private static final int MIN_LEATHER_BATCH = 60;
     private static final int MAX_LEATHER_BATCH = 140;
     private static final int THREAD_BATCH = 80;
+    private static final int CRAFTING_FUNDING_BUFFER_COINS = 450;
     private static final long GE_OFFER_CHECK_DELAY_MILLIS = 7_000L;
+    private static final String[] CRAFTING_FUNDING_SAFE_SELL_ITEMS = F2PItemRegistry.fundingSellItems();
+    private static final String[] CRAFTING_FUNDING_SALE_KEEP_ITEMS = {
+            NEEDLE,
+            THREAD,
+            LEATHER,
+            COINS
+    };
 
     private static final LeatherProduct[] PRODUCTS = {
             new LeatherProduct("Leather gloves", 1),
@@ -57,6 +68,14 @@ public class CraftingModule extends AbstractSkillingModule {
     private int pendingBuyQuantity;
     private int pendingBuyPrice;
     private long pendingOfferCheckAt;
+    private final FundingPlanner fundingPlanner = new FundingPlanner();
+    private String pendingFundingSellItem;
+    private int pendingFundingSellQuantity;
+    private int pendingFundingSellPrice;
+    private boolean pendingFundingSellOfferPlaced;
+    private long nextPendingFundingSellCheckAt;
+    private String activeFundingTargetItem;
+    private int activeFundingTargetCoins;
 
     public CraftingModule(Consumer<String> logger, ScriptStats stats, SkillCapManager caps) {
         super(logger, stats, caps);
@@ -88,6 +107,11 @@ public class CraftingModule extends AbstractSkillingModule {
         stats.setTrainingSkill("Crafting");
 
         if (clearBlockingContinue(ctx)) {
+            return;
+        }
+
+        if (pendingFundingSellItem != null) {
+            handlePendingFundingSale(ctx);
             return;
         }
 
@@ -258,10 +282,7 @@ public class CraftingModule extends AbstractSkillingModule {
         }
 
         if (inventoryCoins + bankCoins < totalCost) {
-            log("Not enough coins for Crafting buy: " + itemName + " ("
-                    + (inventoryCoins + bankCoins) + "/" + totalCost + ")");
-            ctx.bank().close();
-            Time.sleep(900, 1400);
+            startCraftingFundingFromBank(ctx, itemName, totalCost, inventoryCoins, bankCoins);
             return;
         }
 
@@ -273,6 +294,244 @@ public class CraftingModule extends AbstractSkillingModule {
                 + " at " + pendingBuyPrice + " each");
         ctx.bank().close();
         Time.sleep(600, 900, () -> !ctx.bank().isOpen(), 100);
+    }
+
+    private void startCraftingFundingFromBank(
+            APIContext ctx,
+            String targetItem,
+            int targetCost,
+            int inventoryCoins,
+            int bankCoins
+    ) {
+        activeFundingTargetItem = targetItem;
+        activeFundingTargetCoins = targetCost + fundingPlanner.randomBufferCoins(CRAFTING_FUNDING_BUFFER_COINS);
+
+        FundingPlanner.Decision decision = chooseCraftingFundingDecision(ctx);
+        if (decision.method() == FundingPlanner.Method.SELL_READY_STOCK) {
+            startCraftingFundingStockSale(ctx, decision);
+            return;
+        }
+
+        log("Not enough coins for Crafting buy: " + targetItem + " ("
+                + (inventoryCoins + bankCoins) + "/" + targetCost
+                + "), and no ready sellable funding stock was found");
+        stats.setFundingReason("Crafting waiting for coins: " + targetItem);
+        ctx.bank().close();
+        Time.sleep(900, 1400);
+    }
+
+    private FundingPlanner.Decision chooseCraftingFundingDecision(APIContext ctx) {
+        int knownCoins = knownCraftingFundingCoins(ctx);
+        FundingPlanner.Decision decision = fundingPlanner.choose(
+                activeFundingTargetCoins,
+                knownCoins,
+                craftingFundingAssets(ctx)
+        );
+        if (decision.method() == FundingPlanner.Method.SELL_READY_STOCK) {
+            log("Crafting FundingPlanner selected stock sale: "
+                    + decision.itemName()
+                    + " inv=" + decision.inventoryCount()
+                    + " bank=" + decision.bankCount()
+                    + " projected~" + decision.projectedValue() + "gp");
+            stats.setFundingReason("Crafting stock sale: " + decision.itemName()
+                    + " for " + activeFundingTargetItem);
+        }
+        return decision;
+    }
+
+    private List<FundingPlanner.Asset> craftingFundingAssets(APIContext ctx) {
+        List<FundingPlanner.Asset> assets = new ArrayList<>();
+        for (String itemName : CRAFTING_FUNDING_SAFE_SELL_ITEMS) {
+            if (!isSafeCraftingFundingItem(itemName)) {
+                continue;
+            }
+
+            assets.add(new FundingPlanner.Asset(
+                    itemName,
+                    inventoryItemCount(ctx, itemName),
+                    bankItemCount(ctx, itemName),
+                    sellPriceFor(ctx, itemName)
+            ));
+        }
+        return assets;
+    }
+
+    private boolean isSafeCraftingFundingItem(String itemName) {
+        if (itemName == null || itemName.isBlank() || !F2PItemRegistry.isGeSellable(itemName)) {
+            return false;
+        }
+        if (namesMatch(itemName, NEEDLE)
+                || namesMatch(itemName, THREAD)
+                || namesMatch(itemName, LEATHER)
+                || namesMatch(itemName, COINS)
+                || isCraftingProduct(itemName)) {
+            return false;
+        }
+        return true;
+    }
+
+    private void startCraftingFundingStockSale(APIContext ctx, FundingPlanner.Decision decision) {
+        pendingFundingSellItem = decision.itemName();
+        pendingFundingSellQuantity = Math.max(1, decision.inventoryCount() + decision.bankCount());
+        pendingFundingSellPrice = sellPriceFor(ctx, pendingFundingSellItem);
+        pendingFundingSellOfferPlaced = false;
+        nextPendingFundingSellCheckAt = 0L;
+        log("Crafting funding selected stock sale: " + pendingFundingSellQuantity
+                + "x " + pendingFundingSellItem + " for " + activeFundingTargetItem);
+        stats.setFundingReason("Crafting stock sale: " + pendingFundingSellItem
+                + " for " + activeFundingTargetItem);
+        withdrawFundingStockFromBank(ctx);
+    }
+
+    private void handlePendingFundingSale(APIContext ctx) {
+        if (isBankOpen(ctx)) {
+            withdrawFundingStockFromBank(ctx);
+            return;
+        }
+
+        if (inventoryItemCount(ctx, pendingFundingSellItem) <= 0 && !pendingFundingSellOfferPlaced) {
+            if (ctx.grandExchange().isOpen()) {
+                log("Closing GE before Crafting funding stock bank");
+                ctx.grandExchange().close();
+                Time.sleep(600, 900, () -> !ctx.grandExchange().isOpen(), 100);
+                return;
+            }
+            if (!Navigation.isBankReachable(ctx)) {
+                log("Walking to bank for Crafting funding stock");
+                Navigation.walkToBank(ctx);
+                Time.sleep(1200, 1800);
+                return;
+            }
+
+            log("Opening bank for Crafting funding stock");
+            Navigation.openBank(ctx);
+            Time.sleep(1200, 1800, () -> isBankOpen(ctx), 100);
+            return;
+        }
+
+        if (!isAtGrandExchange(ctx)) {
+            log("Walking to GE to sell Crafting funding stock: " + pendingFundingSellItem);
+            Navigation.walkToNoTeleports(ctx, grandExchangeArea().getRandomTile());
+            Time.sleep(1200, 1800);
+            return;
+        }
+
+        if (!ctx.grandExchange().isOpen()) {
+            log("Opening GE to sell Crafting funding stock: " + pendingFundingSellItem);
+            ctx.grandExchange().open();
+            Time.sleep(1200, 1800, () -> ctx.grandExchange().isOpen(), 100);
+            return;
+        }
+
+        if (pendingFundingSellOfferPlaced) {
+            if (System.currentTimeMillis() < nextPendingFundingSellCheckAt) {
+                Time.sleep(600, 900);
+                return;
+            }
+
+            collectSaleOffers(ctx);
+            if (inventoryItemCount(ctx, pendingFundingSellItem) <= 0) {
+                log("Crafting funding sale collected: " + pendingFundingSellItem);
+                clearPendingFundingSale();
+                closeGrandExchangeAfterTrade(ctx, "Crafting funding sale collection");
+            } else {
+                nextPendingFundingSellCheckAt = System.currentTimeMillis() + 5_000L;
+            }
+            return;
+        }
+
+        int quantity = Math.min(
+                pendingFundingSellQuantity,
+                inventoryItemCount(ctx, pendingFundingSellItem)
+        );
+        if (quantity <= 0) {
+            clearPendingFundingSale();
+            return;
+        }
+
+        log("Selling Crafting funding stock: " + quantity + "x " + pendingFundingSellItem
+                + " at " + pendingFundingSellPrice + " each");
+        boolean placed = ctx.grandExchange().placeSellOffer(pendingFundingSellItem, quantity, pendingFundingSellPrice);
+        if (!placed) {
+            log("Crafting funding sell offer was not placed; retrying " + pendingFundingSellItem);
+            Time.sleep(1200, 1800);
+            return;
+        }
+
+        pendingFundingSellOfferPlaced = true;
+        nextPendingFundingSellCheckAt = System.currentTimeMillis() + 5_000L;
+        Time.sleep(5000, 8000);
+        collectSaleOffers(ctx);
+        closeGrandExchangeAfterTrade(ctx, "Crafting funding sale");
+    }
+
+    private void withdrawFundingStockFromBank(APIContext ctx) {
+        if (!isBankOpen(ctx)) {
+            return;
+        }
+
+        if (!craftingFundingSaleInventoryIsClean(ctx)) {
+            log("Clearing inventory before Crafting funding sale");
+            ctx.bank().depositAllExcept(CRAFTING_FUNDING_SALE_KEEP_ITEMS);
+            Time.sleep(600, 900);
+            return;
+        }
+
+        int bankCount = bankItemCount(ctx, pendingFundingSellItem);
+        int inventoryCount = inventoryItemCount(ctx, pendingFundingSellItem);
+        if (bankCount <= 0) {
+            if (inventoryCount > 0) {
+                log("Crafting funding stock already in inventory: " + pendingFundingSellItem);
+                closeBank(ctx);
+                Time.sleep(600, 900);
+                return;
+            }
+
+            log("Crafting funding stock no longer available: " + pendingFundingSellItem);
+            clearPendingFundingSale();
+            return;
+        }
+
+        if (inventoryCount >= pendingFundingSellQuantity) {
+            closeBank(ctx);
+            Time.sleep(600, 900);
+            return;
+        }
+
+        if (!ctx.bank().isWithdrawMode(IBankAPI.WithdrawMode.NOTE)) {
+            log("Selecting noted withdraw mode for Crafting funding stock");
+            ctx.bank().selectWithdrawMode(IBankAPI.WithdrawMode.NOTE);
+            Time.sleep(600, 900, () -> ctx.bank().isWithdrawMode(IBankAPI.WithdrawMode.NOTE), 100);
+            return;
+        }
+
+        int quantity = Math.min(bankCount, pendingFundingSellQuantity - inventoryCount);
+        log("Withdrawing " + quantity + "x " + pendingFundingSellItem + " as notes for Crafting funding");
+        boolean withdrew = quantity >= bankCount
+                ? ctx.bank().withdrawAll(pendingFundingSellItem)
+                : ctx.bank().withdraw(quantity, pendingFundingSellItem);
+        Time.sleep(600, 900);
+
+        if (withdrew) {
+            ctx.bank().selectWithdrawMode(IBankAPI.WithdrawMode.ITEM);
+            Time.sleep(400, 700, () -> ctx.bank().isWithdrawMode(IBankAPI.WithdrawMode.ITEM), 100);
+            closeBank(ctx);
+            Time.sleep(600, 900);
+        }
+    }
+
+    private boolean craftingFundingSaleInventoryIsClean(APIContext ctx) {
+        for (ItemWidget item : ctx.inventory().getItems()) {
+            if (item == null || item.getName() == null || item.getName().isBlank()) {
+                continue;
+            }
+            if (namesMatch(item.getName(), pendingFundingSellItem)
+                    || matchesAnyName(item.getName(), CRAFTING_FUNDING_SALE_KEEP_ITEMS)) {
+                continue;
+            }
+            return false;
+        }
+        return true;
     }
 
     private void handlePendingBuy(APIContext ctx) {
@@ -857,6 +1116,75 @@ public class CraftingModule extends AbstractSkillingModule {
         }
     }
 
+    private void collectSaleOffers(APIContext ctx) {
+        try {
+            ctx.grandExchange().collectToInventory();
+            Time.sleep(500, 800);
+        } catch (RuntimeException ignored) {
+            // Collection fails harmlessly when the sale is still pending.
+        }
+    }
+
+    private void closeGrandExchangeAfterTrade(APIContext ctx, String reason) {
+        if (!ctx.grandExchange().isOpen()) {
+            return;
+        }
+        log("Closing GE after " + reason);
+        ctx.grandExchange().close();
+        Time.sleep(600, 900, () -> !ctx.grandExchange().isOpen(), 100);
+    }
+
+    private void closeBank(APIContext ctx) {
+        if (!isBankOpen(ctx)) {
+            return;
+        }
+        ctx.bank().close();
+        Time.sleep(500, 800, () -> !isBankOpen(ctx), 100);
+    }
+
+    private int knownCraftingFundingCoins(APIContext ctx) {
+        int coins = ctx.inventory().getCount(true, COINS);
+        if (isBankOpen(ctx)) {
+            coins += ctx.bank().getCount(COINS);
+        }
+        return coins;
+    }
+
+    private int inventoryItemCount(APIContext ctx, String itemName) {
+        return ctx.inventory().getCount(true, itemName);
+    }
+
+    private int bankItemCount(APIContext ctx, String itemName) {
+        if (!isBankOpen(ctx)) {
+            return 0;
+        }
+
+        int count = ctx.bank().getCount(itemName);
+        if (count > 0) {
+            return count;
+        }
+
+        for (ItemWidget item : ctx.bank().getItems()) {
+            if (item != null && namesMatch(item.getName(), itemName)) {
+                return Math.max(1, item.getStackSize());
+            }
+        }
+        return bankHasItem(ctx, itemName) ? 1 : 0;
+    }
+
+    private int sellPriceFor(APIContext ctx, String itemName) {
+        return GePricing.quickSellPrice(ctx, itemName, 1L);
+    }
+
+    private boolean matchesAnyName(String itemName, String... allowedNames) {
+        for (String allowedName : allowedNames) {
+            if (namesMatch(itemName, allowedName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private boolean confirmGeHighPriceWarning(APIContext ctx) {
         WidgetChild yes = findVisibleWidgetByText(ctx, "Yes");
         if (yes == null || !hasVisibleWidgetText(ctx, "much higher than the guide price")) {
@@ -962,6 +1290,16 @@ public class CraftingModule extends AbstractSkillingModule {
         pendingBuyQuantity = 0;
         pendingBuyPrice = 0;
         pendingOfferCheckAt = 0L;
+    }
+
+    private void clearPendingFundingSale() {
+        pendingFundingSellItem = null;
+        pendingFundingSellQuantity = 0;
+        pendingFundingSellPrice = 0;
+        pendingFundingSellOfferPlaced = false;
+        nextPendingFundingSellCheckAt = 0L;
+        activeFundingTargetItem = null;
+        activeFundingTargetCoins = 0;
     }
 
     private void logInterfaceRecovery(String message) {
