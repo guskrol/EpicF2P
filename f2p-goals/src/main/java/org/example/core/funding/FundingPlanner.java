@@ -39,7 +39,7 @@ public class FundingPlanner {
             boolean coversTarget = knownCoins + value >= targetCoins;
             boolean sellableBatch = asset.totalCount() >= minimumSaleBatch(asset.name());
             boolean sellableNow = accumulateUntilTarget
-                    ? coversTarget
+                    ? coversTarget && asset.bankCount() > 0 && asset.inventoryCount() == 0
                     : coversTarget || knownCoins + totalValue >= targetCoins || sellableBatch;
 
             if (sellableNow) {
