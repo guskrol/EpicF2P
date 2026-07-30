@@ -267,6 +267,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
             return true;
         }
 
+        pendingToolBuyPrice = Math.max(pendingToolBuyPrice, toolBuyPrice(ctx, pendingToolPurchase));
         log("Buying " + toolLabel + " upgrade: 1x " + pendingToolPurchase + " for " + pendingToolBuyPrice);
         boolean placed = ctx.grandExchange().placeBuyOffer(pendingToolPurchase, 1, pendingToolBuyPrice);
         if (!placed) {

@@ -374,6 +374,7 @@ public class DoricQuestModule implements ManagedF2PModule {
             }
         }
 
+        pendingBuyPrice = Math.max(pendingBuyPrice, GePricing.quickBuyPrice(ctx, pendingBuyItem, requiredBuyPrice(pendingBuyItem)));
         stats.setStatus("Doric's Quest: buying " + pendingBuyQuantity + "x " + pendingBuyItem);
         log("Doric's Quest: buying " + pendingBuyQuantity + "x " + pendingBuyItem + " for " + pendingBuyPrice + " each");
         boolean placed = ctx.grandExchange().placeBuyOffer(pendingBuyItem, pendingBuyQuantity, pendingBuyPrice);
@@ -815,6 +816,15 @@ public class DoricQuestModule implements ManagedF2PModule {
     private void log(String message) {
         stats.setStatus(message);
         logger.accept(message);
+    }
+
+    private int requiredBuyPrice(String itemName) {
+        for (RequiredItem item : REQUIRED_ITEMS) {
+            if (item.name.equalsIgnoreCase(itemName)) {
+                return item.buyPrice;
+            }
+        }
+        return 0;
     }
 
     private record RequiredItem(String name, int quantity, int buyPrice) {

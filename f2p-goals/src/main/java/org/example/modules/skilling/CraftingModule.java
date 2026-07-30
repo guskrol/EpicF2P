@@ -841,6 +841,7 @@ public class CraftingModule extends AbstractSkillingModule {
             return;
         }
 
+        pendingBuyPrice = Math.max(pendingBuyPrice, materialBuyPrice(ctx, pendingBuyItem));
         log("Buying Crafting material: " + pendingBuyQuantity + "x " + pendingBuyItem
                 + " for " + pendingBuyPrice + " each");
         boolean placed = ctx.grandExchange().placeBuyOffer(pendingBuyItem, pendingBuyQuantity, pendingBuyPrice);

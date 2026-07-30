@@ -768,6 +768,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
             return true;
         }
 
+        pendingBuyPrice = Math.max(pendingBuyPrice, buyPriceFor(ctx, pendingBuyItem));
         log("Buying Magic setup item: " + pendingBuyQuantity + "x " + pendingBuyItem
                 + " for " + pendingBuyPrice + " each");
         boolean placed = ctx.grandExchange().placeBuyOffer(pendingBuyItem, pendingBuyQuantity, pendingBuyPrice);
@@ -1905,12 +1906,6 @@ public class MagicSplashingModule implements ManagedF2PModule {
     }
 
     private int buyPriceFor(APIContext ctx, String itemName) {
-        if (isRune(itemName)) {
-            int fixedRunePrice = F2PItemRegistry.buyPrice(itemName);
-            if (fixedRunePrice > 0) {
-                return fixedRunePrice;
-            }
-        }
         return GePricing.quickBuyPrice(ctx, itemName, fallbackBuyPrice(itemName));
     }
 

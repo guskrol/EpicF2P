@@ -37,7 +37,7 @@ import java.util.List;
 
 @ScriptManifest(name = "F2P Goals", gameType = GameType.OS)
 public class F2PGoalsScript extends Script {
-    private static final String SCRIPT_VERSION = "v0.4.223-protected-funding-ui";
+    private static final String SCRIPT_VERSION = "v0.4.224-api-buy-prices";
     private static final boolean QUEST_TEST_ONLY = false;
     private static final boolean RANGED_TEST_ONLY = false;
     private static final boolean MAGIC_TEST_ONLY = false;

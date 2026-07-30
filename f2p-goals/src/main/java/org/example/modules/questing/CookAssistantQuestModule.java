@@ -642,6 +642,7 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
             }
         }
 
+        pendingBuyPrice = Math.max(pendingBuyPrice, GePricing.quickBuyPrice(ctx, pendingBuyItem, buyPrice(pendingBuyItem)));
         stats.setStatus("Cook's Assistant: buying " + pendingBuyItem);
         log("Cook's Assistant: buying " + pendingBuyItem + " for " + pendingBuyPrice);
         boolean placed = ctx.grandExchange().placeBuyOffer(pendingBuyItem, 1, pendingBuyPrice);
