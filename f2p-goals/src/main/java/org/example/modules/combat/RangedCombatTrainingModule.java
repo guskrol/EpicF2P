@@ -6,6 +6,8 @@ import org.example.core.ManagedF2PModule;
 
 public class RangedCombatTrainingModule implements ManagedF2PModule {
     private static final int MIN_DEFENCE_LEVEL = 15;
+    private static final int MIN_CATCH_UP_TARGET_LEVEL = 20;
+    private static final int CATCH_UP_PRIORITY_BOOST = 90;
 
     private final LumbridgeCowCombatModule combatModule;
 
@@ -37,8 +39,33 @@ public class RangedCombatTrainingModule implements ManagedF2PModule {
     }
 
     @Override
+    public boolean isProtectedSubphase(APIContext ctx) {
+        return combatModule.isProtectedFundingSubphase();
+    }
+
+    @Override
+    public String protectedSubphaseName(APIContext ctx) {
+        return combatModule.protectedFundingLabel();
+    }
+
+    @Override
     public int priority(APIContext ctx) {
-        return Math.max(0, LumbridgeCowCombatModule.RANGED_TRAINING_CAP
-                - ctx.skills().get(Skill.Skills.RANGED).getRealLevel());
+        int rangedLevel = ctx.skills().get(Skill.Skills.RANGED).getRealLevel();
+        int remaining = Math.max(0, LumbridgeCowCombatModule.RANGED_TRAINING_CAP - rangedLevel);
+        int catchUpTarget = catchUpTarget(ctx);
+        if (rangedLevel < catchUpTarget) {
+            return CATCH_UP_PRIORITY_BOOST + Math.max(1, catchUpTarget - rangedLevel);
+        }
+        return remaining;
+    }
+
+    private int catchUpTarget(APIContext ctx) {
+        int defenceLevel = ctx.skills().get(Skill.Skills.DEFENCE).getRealLevel();
+        if (defenceLevel < MIN_DEFENCE_LEVEL) {
+            return 0;
+        }
+
+        int target = Math.max(MIN_CATCH_UP_TARGET_LEVEL, defenceLevel + 5);
+        return Math.min(LumbridgeCowCombatModule.RANGED_TRAINING_CAP, target);
     }
 }

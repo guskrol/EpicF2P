@@ -394,6 +394,17 @@ public class LumbridgeCowCombatModule implements F2PModule {
         return true;
     }
 
+    public boolean isProtectedFundingSubphase() {
+        return woodcuttingFundingMode || activeFundingDecision != null;
+    }
+
+    public String protectedFundingLabel() {
+        if (!isProtectedFundingSubphase()) {
+            return "combat funding";
+        }
+        return activeFundingMethodLabel() + " funding for " + fundingTargetName();
+    }
+
     @Override
     public void execute(APIContext ctx) {
         logCombatTickEntered();

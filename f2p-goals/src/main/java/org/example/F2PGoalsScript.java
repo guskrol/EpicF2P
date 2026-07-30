@@ -5,6 +5,7 @@ import com.epicbot.api.shared.APIContext;
 import com.epicbot.api.shared.event.ChatMessageEvent;
 import com.epicbot.api.shared.script.Script;
 import com.epicbot.api.shared.script.ScriptManifest;
+import com.epicbot.api.shared.model.Skill;
 import org.example.core.F2PModule;
 import org.example.core.ManagedF2PModule;
 import org.example.core.ModuleTask;
@@ -36,7 +37,7 @@ import java.util.List;
 
 @ScriptManifest(name = "F2P Goals", gameType = GameType.OS)
 public class F2PGoalsScript extends Script {
-    private static final String SCRIPT_VERSION = "v0.4.221-view-recovery";
+    private static final String SCRIPT_VERSION = "v0.4.223-protected-funding-ui";
     private static final boolean QUEST_TEST_ONLY = false;
     private static final boolean RANGED_TEST_ONLY = false;
     private static final boolean MAGIC_TEST_ONLY = false;
@@ -220,55 +221,82 @@ public class F2PGoalsScript extends Script {
 
         stats.startExperienceIfNeeded(ctx);
 
+        boolean hasFunding = hasValue(stats.lastFundingReason());
+        boolean hasError = hasValue(stats.lastRecoverableError());
+        boolean hasStatus = hasValue(stats.status());
         int x = 8;
         int y = 8;
-        int width = 285;
-        int height = 356;
-        paint.fill(new Rectangle(x, y, width, height), new Color(18, 22, 28, 190));
-        paint.draw(new Rectangle(x, y, width, height), new Color(230, 235, 245, 210), 1);
+        int width = 318;
+        int height = 229
+                + (hasFunding ? 15 : 0)
+                + (hasError ? 15 : 0)
+                + (hasStatus ? 15 : 0);
+        Color panel = new Color(12, 15, 20, 188);
+        Color header = new Color(24, 34, 43, 220);
+        Color border = new Color(160, 178, 194, 190);
+        Color primary = new Color(236, 242, 248);
+        Color muted = new Color(177, 195, 212);
+        Color accent = new Color(96, 190, 170);
+        Color gold = new Color(241, 211, 118);
+        Color danger = new Color(255, 166, 150);
+
+        paint.fill(new Rectangle(x, y, width, height), panel);
+        paint.fill(new Rectangle(x, y, width, 30), header);
+        paint.draw(new Rectangle(x, y, width, height), border, 1);
 
         int line = y + 20;
-        paint.drawText("F2P Goals " + SCRIPT_VERSION, x + 12, line, Color.WHITE, 14);
-        line += 18;
-        paint.drawText("Runtime: " + stats.runtimeText(), x + 12, line, new Color(220, 235, 255), 12);
-        line += 16;
-        paint.drawText("Task: " + shortText(stats.currentTask(), 32), x + 12, line, new Color(220, 235, 255), 12);
-        line += 16;
-        paint.drawText("Phase: " + stats.internalPhase(), x + 12, line, new Color(220, 235, 255), 12);
-        line += 16;
-        paint.drawText("Next: " + shortText(stats.nextObjective(), 34), x + 12, line, new Color(220, 235, 255), 11);
-        line += 16;
-        paint.drawText("Task left: " + stats.goalRemainingText(), x + 12, line, new Color(220, 235, 255), 12);
-        line += 16;
-        paint.drawText("Kills: " + stats.kills(), x + 12, line, new Color(220, 235, 255), 12);
-        line += 16;
-        paint.drawText("Training: " + stats.trainingSkill(), x + 12, line, new Color(220, 235, 255), 12);
-        line += 16;
-        paint.drawText("Goal: " + stats.goalText(), x + 12, line, new Color(220, 235, 255), 11);
-        line += 16;
-        paint.drawText("Caps: " + capText(ctx), x + 12, line, new Color(220, 235, 255), 11);
-        line += 16;
-        paint.drawText("Melee: " + meleeCapText(ctx), x + 12, line, new Color(220, 235, 255), 11);
-        line += 16;
-        paint.drawText("GE: " + (stats.isGeRestricted() ? "restricted" : "available"), x + 12, line, new Color(220, 235, 255), 12);
-        line += 16;
-        paint.drawText("XP: " + stats.xpGained(ctx) + " (" + stats.xpPerHour(ctx) + "/h)", x + 12, line, new Color(220, 235, 255), 12);
-        line += 16;
-        paint.drawText("GP est.: " + stats.estimatedGold() + " (" + stats.goldPerHour() + "/h)", x + 12, line, new Color(245, 228, 160), 12);
-        line += 16;
-        paint.drawText("Coins looted: " + stats.coinsLooted(), x + 12, line, new Color(245, 228, 160), 12);
-        line += 16;
-        paint.drawText("Cowhide: " + stats.cowhidesLooted() + " | Loots: " + stats.itemsLooted(), x + 12, line, new Color(220, 235, 255), 12);
-        line += 16;
-        paint.drawText("Feathers: " + stats.feathersLooted(), x + 12, line, new Color(220, 235, 255), 12);
-        line += 16;
-        paint.drawText("Bones buried: " + stats.bonesBuried(), x + 12, line, new Color(220, 235, 255), 12);
-        line += 16;
-        paint.drawText("Funding: " + shortText(stats.lastFundingReason(), 34), x + 12, line, new Color(245, 228, 160), 11);
-        line += 16;
-        paint.drawText("Last err: " + shortText(stats.lastRecoverableError(), 34), x + 12, line, new Color(255, 190, 180), 11);
-        line += 16;
-        paint.drawText("Status: " + shortText(stats.status(), 36), x + 12, line, new Color(195, 210, 230), 11);
+        paint.drawText("F2P Goals", x + 12, line, Color.WHITE, 14);
+        paint.drawText(SCRIPT_VERSION, x + 108, line, muted, 10);
+
+        line = y + 48;
+        paint.drawText(shortText(stats.currentTask() + " | " + stats.internalPhase(), 43), x + 12, line, primary, 12);
+        line += 15;
+        paint.drawText("Next: " + shortText(stats.nextObjective(), 43), x + 12, line, muted, 11);
+        line += 15;
+        paint.drawText("Time: run " + stats.runtimeText()
+                + " | left " + stats.goalRemainingText(), x + 12, line, muted, 11);
+
+        line += 20;
+        paint.drawText("Skills", x + 12, line, accent, 11);
+        line += 15;
+        paint.drawText("Combat " + combatCapText(ctx), x + 12, line, primary, 11);
+        line += 15;
+        paint.drawText("Gather " + gatheringCapText(ctx), x + 12, line, primary, 11);
+        line += 15;
+        paint.drawText("Make " + productionCapText(ctx), x + 12, line, primary, 11);
+        line += 15;
+        paint.drawText("Training " + stats.trainingSkill()
+                + " | Kills " + stats.kills(), x + 12, line, muted, 11);
+
+        line += 20;
+        paint.drawText("Economy", x + 12, line, accent, 11);
+        line += 15;
+        paint.drawText("GE " + (stats.isGeRestricted() ? "restricted" : "available")
+                + " | XP " + stats.xpGained(ctx) + " (" + stats.xpPerHour(ctx) + "/h)", x + 12, line, primary, 11);
+        line += 15;
+        paint.drawText("Gold " + stats.estimatedGold() + " (" + stats.goldPerHour() + "/h)"
+                + " | Coins +" + stats.coinsLooted(), x + 12, line, gold, 11);
+        line += 15;
+        paint.drawText("Loot hides " + stats.cowhidesLooted()
+                + " | items " + stats.itemsLooted()
+                + " | bones " + stats.bonesBuried(), x + 12, line, muted, 11);
+
+        if (hasFunding || hasError || hasStatus) {
+            line += 20;
+            paint.drawText("Alerts", x + 12, line, accent, 11);
+        }
+        if (hasFunding) {
+            line += 15;
+            paint.drawText("Funding: " + shortText(stats.lastFundingReason(), 42), x + 12, line, gold, 11);
+        }
+        if (hasError) {
+            line += 15;
+            paint.drawText("Last err: " + shortText(stats.lastRecoverableError(), 42), x + 12, line, danger, 11);
+        }
+        if (hasStatus) {
+            line += 15;
+            paint.drawText("Status: " + shortText(stats.status(), 43), x + 12, line, muted, 11);
+        }
     }
 
     @Override
@@ -307,36 +335,45 @@ public class F2PGoalsScript extends Script {
         getLogger().info(message);
     }
 
-    private String capText(APIContext ctx) {
+    private String gatheringCapText(APIContext ctx) {
         if (skillCaps == null) {
             return "-";
         }
 
-        return "WC " + ctx.skills().woodcutting().getRealLevel() + "/" + skillCaps.capFor(com.epicbot.api.shared.model.Skill.Skills.WOODCUTTING)
-                + " Fsh " + ctx.skills().fishing().getRealLevel() + "/" + skillCaps.capFor(com.epicbot.api.shared.model.Skill.Skills.FISHING)
-                + " Min " + ctx.skills().get(com.epicbot.api.shared.model.Skill.Skills.MINING).getRealLevel()
-                + "/" + skillCaps.capFor(com.epicbot.api.shared.model.Skill.Skills.MINING)
-                + " Sm " + ctx.skills().get(com.epicbot.api.shared.model.Skill.Skills.SMITHING).getRealLevel()
-                + "/" + skillCaps.capFor(com.epicbot.api.shared.model.Skill.Skills.SMITHING)
-                + " Cr " + ctx.skills().get(com.epicbot.api.shared.model.Skill.Skills.CRAFTING).getRealLevel()
-                + "/" + skillCaps.capFor(com.epicbot.api.shared.model.Skill.Skills.CRAFTING);
+        return "WC " + levelCap(ctx, Skill.Skills.WOODCUTTING)
+                + " | Fish " + levelCap(ctx, Skill.Skills.FISHING)
+                + " | Mine " + levelCap(ctx, Skill.Skills.MINING);
     }
 
-    private String meleeCapText(APIContext ctx) {
+    private String productionCapText(APIContext ctx) {
         if (skillCaps == null) {
             return "-";
         }
 
-        return "A " + ctx.skills().get(com.epicbot.api.shared.model.Skill.Skills.ATTACK).getRealLevel()
-                + "/" + skillCaps.capFor(com.epicbot.api.shared.model.Skill.Skills.ATTACK)
-                + " S " + ctx.skills().get(com.epicbot.api.shared.model.Skill.Skills.STRENGTH).getRealLevel()
-                + "/" + skillCaps.capFor(com.epicbot.api.shared.model.Skill.Skills.STRENGTH)
-                + " D " + ctx.skills().get(com.epicbot.api.shared.model.Skill.Skills.DEFENCE).getRealLevel()
-                + "/" + skillCaps.capFor(com.epicbot.api.shared.model.Skill.Skills.DEFENCE)
-                + " R " + ctx.skills().get(com.epicbot.api.shared.model.Skill.Skills.RANGED).getRealLevel()
-                + "/" + skillCaps.capFor(com.epicbot.api.shared.model.Skill.Skills.RANGED)
-                + " M " + ctx.skills().get(com.epicbot.api.shared.model.Skill.Skills.MAGIC).getRealLevel()
-                + "/" + skillCaps.capFor(com.epicbot.api.shared.model.Skill.Skills.MAGIC);
+        return "FM " + levelCap(ctx, Skill.Skills.FIREMAKING)
+                + " | Cook " + levelCap(ctx, Skill.Skills.COOKING)
+                + " | Smith " + levelCap(ctx, Skill.Skills.SMITHING)
+                + " | Cr " + levelCap(ctx, Skill.Skills.CRAFTING);
+    }
+
+    private String combatCapText(APIContext ctx) {
+        if (skillCaps == null) {
+            return "-";
+        }
+
+        return "A " + levelCap(ctx, Skill.Skills.ATTACK)
+                + " | S " + levelCap(ctx, Skill.Skills.STRENGTH)
+                + " | D " + levelCap(ctx, Skill.Skills.DEFENCE)
+                + " | R " + levelCap(ctx, Skill.Skills.RANGED)
+                + " | M " + levelCap(ctx, Skill.Skills.MAGIC);
+    }
+
+    private String levelCap(APIContext ctx, Skill.Skills skill) {
+        return ctx.skills().get(skill).getRealLevel() + "/" + skillCaps.capFor(skill);
+    }
+
+    private boolean hasValue(String value) {
+        return value != null && !value.isBlank() && !"-".equals(value.trim());
     }
 
     private String shortText(String value, int maxChars) {

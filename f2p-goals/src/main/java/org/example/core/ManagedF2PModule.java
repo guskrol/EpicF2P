@@ -8,4 +8,12 @@ public interface ManagedF2PModule extends F2PModule {
     default int priority(APIContext ctx) {
         return 0;
     }
+
+    default boolean isProtectedSubphase(APIContext ctx) {
+        return false;
+    }
+
+    default String protectedSubphaseName(APIContext ctx) {
+        return "protected subphase";
+    }
 }

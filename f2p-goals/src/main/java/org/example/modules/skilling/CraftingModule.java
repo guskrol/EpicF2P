@@ -115,6 +115,25 @@ public class CraftingModule extends AbstractSkillingModule {
     }
 
     @Override
+    public boolean isProtectedSubphase(APIContext ctx) {
+        return activeFundingDecision != null || pendingFundingSellItem != null;
+    }
+
+    @Override
+    public String protectedSubphaseName(APIContext ctx) {
+        String targetItem = activeFundingTargetItem == null || activeFundingTargetItem.isBlank()
+                ? "Crafting materials"
+                : activeFundingTargetItem;
+        if (pendingFundingSellItem != null) {
+            return "Crafting stock sale for " + targetItem + ": " + pendingFundingSellItem;
+        }
+        if (activeFundingDecision != null) {
+            return "Crafting " + fundingMethodLabel(activeFundingDecision.method()) + " for " + targetItem;
+        }
+        return "Crafting funding";
+    }
+
+    @Override
     public void execute(APIContext ctx) {
         stats.startExperienceIfNeeded(ctx);
         stats.setTrainingSkill("Crafting");

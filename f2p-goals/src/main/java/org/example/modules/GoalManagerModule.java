@@ -21,6 +21,9 @@ public class GoalManagerModule implements F2PModule {
     private static final long MIN_GOAL_WINDOW_MILLIS = 60 * 60 * 1000L;
     private static final long MAX_GOAL_WINDOW_MILLIS = 90 * 60 * 1000L;
     private static final long WATCHDOG_REROLL_COOLDOWN_MILLIS = 15 * 60_000L;
+    private static final long MIN_PROTECTED_SUBPHASE_EXTENSION_MILLIS = 25 * 60_000L;
+    private static final long MAX_PROTECTED_SUBPHASE_EXTENSION_MILLIS = 45 * 60_000L;
+    private static final long PROTECTED_SUBPHASE_LOG_INTERVAL_MILLIS = 60_000L;
 
     private final Consumer<String> logger;
     private final ScriptStats stats;
@@ -35,6 +38,7 @@ public class GoalManagerModule implements F2PModule {
     private final Map<String, Long> watchdogCooldowns = new HashMap<>();
     private boolean watchdogRerollRequested;
     private String watchdogRerollReason;
+    private long nextProtectedSubphaseLogAt;
 
     public GoalManagerModule(
             Consumer<String> logger,
@@ -68,13 +72,25 @@ public class GoalManagerModule implements F2PModule {
     @Override
     public void execute(APIContext ctx) {
         if (watchdogRerollRequested) {
-            handleWatchdogReroll(ctx);
+            if (activeModule != null && activeModule.isProtectedSubphase(ctx)) {
+                String reason = currentWatchdogRerollReason();
+                watchdogRerollRequested = false;
+                watchdogRerollReason = null;
+                protectActiveSubphase(ctx, "watchdog reroll: " + reason);
+            } else {
+                handleWatchdogReroll(ctx);
+            }
         }
 
         boolean timedOut = activeModule != null && System.currentTimeMillis() >= activeUntil;
         boolean completed = activeModule != null && activeModule.isComplete(ctx);
         if (completed && closeCompletedGoalScreen(ctx, activeModule)) {
             return;
+        }
+
+        if (timedOut && activeModule != null && activeModule.isProtectedSubphase(ctx)) {
+            protectActiveSubphase(ctx, "goal timer expired");
+            timedOut = false;
         }
 
         if (activeModule == null
@@ -188,6 +204,7 @@ public class GoalManagerModule implements F2PModule {
         activeModule = bestCandidates.get(ThreadLocalRandom.current().nextInt(bestCandidates.size()));
         long goalWindowMillis = randomLong(MIN_GOAL_WINDOW_MILLIS, MAX_GOAL_WINDOW_MILLIS);
         activeUntil = System.currentTimeMillis() + goalWindowMillis;
+        nextProtectedSubphaseLogAt = 0L;
         stats.setGoal(displayGoalName(activeModule.name()), activeUntil);
 
         if (previous != activeModule) {
@@ -200,9 +217,7 @@ public class GoalManagerModule implements F2PModule {
     }
 
     private void handleWatchdogReroll(APIContext ctx) {
-        String reason = watchdogRerollReason == null || watchdogRerollReason.isBlank()
-                ? "Loop watchdog requested task reroll"
-                : watchdogRerollReason;
+        String reason = currentWatchdogRerollReason();
         watchdogRerollRequested = false;
         watchdogRerollReason = null;
 
@@ -222,6 +237,37 @@ public class GoalManagerModule implements F2PModule {
                 ? displayGoalName(fallbackModule.name())
                 : displayGoalName(activeModule.name());
         markInventoryCleanupPending(nextTarget);
+    }
+
+    private String currentWatchdogRerollReason() {
+        return watchdogRerollReason == null || watchdogRerollReason.isBlank()
+                ? "Loop watchdog requested task reroll"
+                : watchdogRerollReason;
+    }
+
+    private void protectActiveSubphase(APIContext ctx, String reason) {
+        if (activeModule == null) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        long extensionMillis = randomLong(
+                MIN_PROTECTED_SUBPHASE_EXTENSION_MILLIS,
+                MAX_PROTECTED_SUBPHASE_EXTENSION_MILLIS
+        );
+        activeUntil = Math.max(activeUntil, now + extensionMillis);
+        stats.setGoal(displayGoalName(activeModule.name()), activeUntil);
+
+        if (now < nextProtectedSubphaseLogAt) {
+            stats.setStatus("Protected funding: " + displayGoalName(activeModule.name()));
+            return;
+        }
+
+        log("Protected funding: keeping " + displayGoalName(activeModule.name())
+                + " active; subphase=" + activeModule.protectedSubphaseName(ctx)
+                + "; reason=" + reason
+                + "; goal left~" + Math.max(1L, (activeUntil - now) / 60_000L) + " min");
+        nextProtectedSubphaseLogAt = now + PROTECTED_SUBPHASE_LOG_INTERVAL_MILLIS;
     }
 
     private void expireWatchdogCooldowns() {

@@ -37,6 +37,16 @@ public class CombatTrainingModule implements ManagedF2PModule {
     }
 
     @Override
+    public boolean isProtectedSubphase(APIContext ctx) {
+        return combatModule.isProtectedFundingSubphase();
+    }
+
+    @Override
+    public String protectedSubphaseName(APIContext ctx) {
+        return combatModule.protectedFundingLabel();
+    }
+
+    @Override
     public int priority(APIContext ctx) {
         return caps.levelsRemaining(ctx, Skill.Skills.ATTACK)
                 + caps.levelsRemaining(ctx, Skill.Skills.STRENGTH)

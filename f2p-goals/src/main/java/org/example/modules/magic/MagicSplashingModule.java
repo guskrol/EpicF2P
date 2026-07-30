@@ -32,6 +32,8 @@ public class MagicSplashingModule implements ManagedF2PModule {
     public static final int NORMAL_MAGIC_CAP = 13;
     public static final int FUTURE_SPLASH_CAP = 25;
     private static final int MIN_DEFENCE_LEVEL = 15;
+    private static final int MIN_CATCH_UP_TARGET_LEVEL = 13;
+    private static final int CATCH_UP_PRIORITY_BOOST = 85;
 
     private static final Spell NORMAL_SPELL = Spell.Modern.WIND_STRIKE;
     private static final Spell FIRE_SPLASH_SPELL = Spell.Modern.FIRE_STRIKE;
@@ -296,8 +298,43 @@ public class MagicSplashingModule implements ManagedF2PModule {
     }
 
     @Override
+    public boolean isProtectedSubphase(APIContext ctx) {
+        return activeFundingDecision != null || pendingFundingSellItem != null;
+    }
+
+    @Override
+    public String protectedSubphaseName(APIContext ctx) {
+        String targetItem = activeFundingTargetItem == null || activeFundingTargetItem.isBlank()
+                ? "Magic supplies"
+                : activeFundingTargetItem;
+        if (pendingFundingSellItem != null) {
+            return "Magic stock sale for " + targetItem + ": " + pendingFundingSellItem;
+        }
+        if (activeFundingDecision != null) {
+            return "Magic " + fundingMethodLabel(activeFundingDecision.method()) + " for " + targetItem;
+        }
+        return "Magic funding";
+    }
+
+    @Override
     public int priority(APIContext ctx) {
-        return Math.max(0, FUTURE_SPLASH_CAP - ctx.skills().get(Skill.Skills.MAGIC).getRealLevel());
+        int magicLevel = ctx.skills().get(Skill.Skills.MAGIC).getRealLevel();
+        int remaining = Math.max(0, FUTURE_SPLASH_CAP - magicLevel);
+        int catchUpTarget = catchUpTarget(ctx);
+        if (magicLevel < catchUpTarget) {
+            return CATCH_UP_PRIORITY_BOOST + Math.max(1, catchUpTarget - magicLevel);
+        }
+        return remaining;
+    }
+
+    private int catchUpTarget(APIContext ctx) {
+        int defenceLevel = ctx.skills().get(Skill.Skills.DEFENCE).getRealLevel();
+        if (defenceLevel < MIN_DEFENCE_LEVEL) {
+            return 0;
+        }
+
+        int target = Math.max(MIN_CATCH_UP_TARGET_LEVEL, defenceLevel);
+        return Math.min(FUTURE_SPLASH_CAP, target);
     }
 
     private boolean prepareNormalMagicGearAndRunes(APIContext ctx) {
