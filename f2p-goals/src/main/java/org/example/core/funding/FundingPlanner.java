@@ -18,6 +18,8 @@ public class FundingPlanner {
         Asset best = null;
         long bestValue = 0L;
         long totalValue = 0L;
+        Asset bestAccumulator = null;
+        long bestAccumulatorValue = 0L;
         for (Asset asset : assets) {
             if (asset == null || asset.totalCount() <= 0 || asset.unitSellPrice() <= 0) {
                 continue;
@@ -25,21 +27,33 @@ public class FundingPlanner {
 
             long value = (long) asset.totalCount() * asset.unitSellPrice();
             totalValue += value;
-            if (knownCoins + value >= targetCoins || asset.totalCount() >= minimumSaleBatch(asset.name())) {
+        }
+
+        for (Asset asset : assets) {
+            if (asset == null || asset.totalCount() <= 0 || asset.unitSellPrice() <= 0) {
+                continue;
+            }
+
+            long value = (long) asset.totalCount() * asset.unitSellPrice();
+            boolean accumulateUntilTarget = shouldAccumulateUntilTarget(asset.name());
+            boolean coversTarget = knownCoins + value >= targetCoins;
+            boolean sellableBatch = asset.totalCount() >= minimumSaleBatch(asset.name());
+            boolean sellableNow = accumulateUntilTarget
+                    ? coversTarget
+                    : coversTarget || knownCoins + totalValue >= targetCoins || sellableBatch;
+
+            if (sellableNow) {
                 if (value > bestValue) {
                     best = asset;
                     bestValue = value;
                 }
-            } else if (best == null && value > bestValue) {
-                best = asset;
-                bestValue = value;
+            } else if (accumulateUntilTarget && value > bestAccumulatorValue) {
+                bestAccumulator = asset;
+                bestAccumulatorValue = value;
             }
         }
 
-        if (best != null
-                && (knownCoins + bestValue >= targetCoins
-                || knownCoins + totalValue >= targetCoins
-                || best.totalCount() >= minimumSaleBatch(best.name()))) {
+        if (best != null) {
             return new Decision(
                     Method.SELL_READY_STOCK,
                     best.name(),
@@ -49,7 +63,28 @@ public class FundingPlanner {
             );
         }
 
+        if (bestAccumulator != null) {
+            return new Decision(
+                    accumulationMethodFor(bestAccumulator.name()),
+                    bestAccumulator.name(),
+                    bestAccumulator.inventoryCount(),
+                    bestAccumulator.bankCount(),
+                    bestAccumulatorValue
+            );
+        }
+
         return fallbackDecision();
+    }
+
+    private boolean shouldAccumulateUntilTarget(String itemName) {
+        return normalizedName(itemName).equals("beerglass");
+    }
+
+    private Method accumulationMethodFor(String itemName) {
+        if (normalizedName(itemName).equals("beerglass")) {
+            return Method.BEER_GLASS;
+        }
+        return Method.SELL_READY_STOCK;
     }
 
     private int minimumSaleBatch(String itemName) {
@@ -58,7 +93,7 @@ public class FundingPlanner {
             return registryBatch;
         }
 
-        String normalized = itemName == null ? "" : itemName.toLowerCase().replaceAll("[^a-z0-9]", "");
+        String normalized = normalizedName(itemName);
         if (normalized.equals("beerglass")) {
             return 140;
         }
@@ -75,6 +110,10 @@ public class FundingPlanner {
             return 54;
         }
         return 27;
+    }
+
+    private String normalizedName(String itemName) {
+        return itemName == null ? "" : itemName.toLowerCase().replaceAll("[^a-z0-9]", "");
     }
 
     private Decision fallbackDecision() {
