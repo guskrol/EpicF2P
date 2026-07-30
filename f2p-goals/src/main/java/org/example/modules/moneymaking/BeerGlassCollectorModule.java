@@ -38,6 +38,8 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
     private final ScriptStats stats;
     private long nextShelvesDebugAt;
     private long nextShelvesViewRecoverAt;
+    private long lastBeerGlassSearchClickAt;
+    private int lastBeerGlassCount = -1;
     private int consecutiveSearchFailures;
 
     public BeerGlassCollectorModule(Consumer<String> logger, ScriptStats stats) {
@@ -118,8 +120,10 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
         }
 
         int before = beerGlassCount(ctx);
+        trackBeerGlassProgress(before);
+
         log("Searching shelves for Beer glass: " + before + "/28");
-        if (shelves.interact("Search")) {
+        if (searchBeerGlassShelves(ctx, shelves, before)) {
             Time.sleep(
                     900,
                     1600,
@@ -129,6 +133,7 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
             int gained = Math.max(0, beerGlassCount(ctx) - before);
             if (gained > 0) {
                 consecutiveSearchFailures = 0;
+                trackBeerGlassProgress(beerGlassCount(ctx));
                 stats.recordLoot(BEER_GLASS, gained, (long) sellPriceFor(ctx, BEER_GLASS) * gained);
                 return;
             }
@@ -136,9 +141,42 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
 
         consecutiveSearchFailures++;
         if (consecutiveSearchFailures >= 3) {
-            log("Beer glass search stalled; returning to exact shelves tile");
+            log("Beer glass search stalled at shelves; repositioning and recovering view");
             walkToBeerGlassStandTile(ctx);
+            ViewRecovery.recover(ctx, BEER_GLASS_STAND_TILE, "Beer glass shelves search", this::log);
             consecutiveSearchFailures = 0;
+        }
+    }
+
+    private boolean searchBeerGlassShelves(APIContext ctx, SceneObject shelves, int beforeCount) {
+        clearInteractionState(ctx);
+
+        boolean staleAtShelf = lastBeerGlassCount == beforeCount
+                && System.currentTimeMillis() - lastBeerGlassSearchClickAt > 4_000L;
+        if (staleAtShelf || consecutiveSearchFailures > 0) {
+            ctx.camera().turnTo(shelves);
+            Time.sleep(250, 500);
+        }
+
+        lastBeerGlassSearchClickAt = System.currentTimeMillis();
+        boolean clicked = shelves.interact("Search")
+                || ctx.menu().interact("Search", shelves, false)
+                || ctx.menu().interact("Search", shelves, true)
+                || shelves.click(false)
+                || ctx.mouse().click(shelves, false)
+                || ctx.menu().interact("Search", true)
+                || ctx.menu().interact("Search");
+        if (!clicked) {
+            log("Beer glass shelves Search click failed; trying view recovery");
+            ViewRecovery.recover(ctx, shelves, "Beer glass shelves", this::log);
+        }
+        return clicked;
+    }
+
+    private void trackBeerGlassProgress(int currentCount) {
+        if (currentCount != lastBeerGlassCount) {
+            lastBeerGlassCount = currentCount;
+            lastBeerGlassSearchClickAt = System.currentTimeMillis();
         }
     }
 
