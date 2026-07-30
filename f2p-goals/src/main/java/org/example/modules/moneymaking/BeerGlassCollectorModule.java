@@ -33,6 +33,8 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
             new Tile(3272, 3166, 0)
     };
     private static final long SHELVES_DEBUG_INTERVAL_MILLIS = 12_000L;
+    private static final int SHELVES_SEARCH_DISTANCE = 8;
+    private static final int MAX_EXACT_TILE_APPROACH_ATTEMPTS = 4;
 
     private final Consumer<String> logger;
     private final ScriptStats stats;
@@ -41,6 +43,7 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
     private long lastBeerGlassSearchClickAt;
     private int lastBeerGlassCount = -1;
     private int consecutiveSearchFailures;
+    private int consecutiveExactTileApproaches;
 
     public BeerGlassCollectorModule(Consumer<String> logger, ScriptStats stats) {
         this.logger = logger;
@@ -106,12 +109,25 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
             return;
         }
 
-        if (!isAtBeerGlassStandTile(ctx)) {
-            walkToBeerGlassStandTile(ctx);
+        SceneObject shelves = findBeerGlassShelves(ctx);
+        if (shelves != null && shelves.isValid() && canSearchShelvesFromHere(ctx, shelves)) {
+            consecutiveExactTileApproaches = 0;
+            handleBeerGlassShelves(ctx, shelves);
             return;
         }
 
-        SceneObject shelves = findBeerGlassShelves(ctx);
+        if (!isAtBeerGlassStandTile(ctx)) {
+            walkToBeerGlassStandTile(ctx);
+            consecutiveExactTileApproaches++;
+            if (consecutiveExactTileApproaches >= MAX_EXACT_TILE_APPROACH_ATTEMPTS) {
+                log("Beer glass exact tile approach loop; trying shelves search recovery");
+                debugNearbySearchObjects(ctx);
+                ViewRecovery.recover(ctx, BEER_GLASS_STAND_TILE, "Beer glass shelves approach", this::log);
+                consecutiveExactTileApproaches = 0;
+            }
+            return;
+        }
+
         if (shelves == null || !shelves.isValid()) {
             debugNearbySearchObjects(ctx);
             recoverShelvesView(ctx);
@@ -119,6 +135,11 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
             return;
         }
 
+        consecutiveExactTileApproaches = 0;
+        handleBeerGlassShelves(ctx, shelves);
+    }
+
+    private void handleBeerGlassShelves(APIContext ctx, SceneObject shelves) {
         int before = beerGlassCount(ctx);
         trackBeerGlassProgress(before);
 
@@ -146,6 +167,13 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
             ViewRecovery.recover(ctx, BEER_GLASS_STAND_TILE, "Beer glass shelves search", this::log);
             consecutiveSearchFailures = 0;
         }
+    }
+
+    private boolean canSearchShelvesFromHere(APIContext ctx, SceneObject shelves) {
+        Tile location = ctx.localPlayer().getLocation();
+        return location != null
+                && SORCERESS_SHELVES_AREA.contains(location)
+                && shelves.tileDistanceTo(ctx) <= SHELVES_SEARCH_DISTANCE;
     }
 
     private boolean searchBeerGlassShelves(APIContext ctx, SceneObject shelves, int beforeCount) {
