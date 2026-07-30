@@ -11,6 +11,7 @@ import org.example.core.ManagedF2PModule;
 import org.example.core.ScriptStats;
 import org.example.core.items.GePricing;
 import org.example.core.navigation.Navigation;
+import org.example.core.navigation.ViewRecovery;
 
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
@@ -36,6 +37,7 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
     private final Consumer<String> logger;
     private final ScriptStats stats;
     private long nextShelvesDebugAt;
+    private long nextShelvesViewRecoverAt;
     private int consecutiveSearchFailures;
 
     public BeerGlassCollectorModule(Consumer<String> logger, ScriptStats stats) {
@@ -110,7 +112,7 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
         SceneObject shelves = findBeerGlassShelves(ctx);
         if (shelves == null || !shelves.isValid()) {
             debugNearbySearchObjects(ctx);
-            log("No Beer glass shelves found near Sorceress house");
+            recoverShelvesView(ctx);
             Time.sleep(900, 1400);
             return;
         }
@@ -418,6 +420,18 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
         }
         log(message.toString());
         nextShelvesDebugAt = now + SHELVES_DEBUG_INTERVAL_MILLIS;
+    }
+
+    private void recoverShelvesView(APIContext ctx) {
+        long now = System.currentTimeMillis();
+        if (now < nextShelvesViewRecoverAt || ctx.localPlayer().isMoving()) {
+            log("No Beer glass shelves found near Sorceress house");
+            return;
+        }
+
+        nextShelvesViewRecoverAt = now + ThreadLocalRandom.current().nextLong(2500L, 5001L);
+        log("No Beer glass shelves found near Sorceress house; adjusting view");
+        ViewRecovery.recover(ctx, BEER_GLASS_STAND_TILE, "Beer glass shelves", this::log);
     }
 
     private Tile randomAlKharidBankTile() {

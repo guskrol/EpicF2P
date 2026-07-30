@@ -12,6 +12,7 @@ import com.epicbot.api.shared.util.time.Time;
 import org.example.core.ScriptStats;
 import org.example.core.SkillCapManager;
 import org.example.core.navigation.Navigation;
+import org.example.core.navigation.ViewRecovery;
 
 import java.awt.Point;
 import java.util.ArrayList;
@@ -103,6 +104,8 @@ public class MiningSmithingModule extends AbstractSkillingModule {
     private final boolean smeltingOnlyMode;
     private final boolean fundingMode;
     private boolean restartSmeltingAfterContinue;
+    private long nextMiningViewRecoverAt;
+    private long nextFurnaceViewRecoverAt;
 
     public MiningSmithingModule(Consumer<String> logger, ScriptStats stats, SkillCapManager caps) {
         this(logger, stats, caps, false);
@@ -258,7 +261,8 @@ public class MiningSmithingModule extends AbstractSkillingModule {
         OreKind preferredOre = preferredOreKind(ctx);
         SceneObject rock = findMineableRock(ctx, preferredOre);
         if (rock == null || !rock.isValid()) {
-            log("No mineable " + preferredOre.label + " rock found");
+            log("No mineable " + preferredOre.label + " rock found; adjusting view");
+            recoverMiningView(ctx, "mineable " + preferredOre.label + " rock");
             Time.sleep(1000, 1600);
             return;
         }
@@ -366,6 +370,26 @@ public class MiningSmithingModule extends AbstractSkillingModule {
 
     private boolean isAtSwampMineWorkArea(Tile location) {
         return location != null && LUMBRIDGE_SWAMP_MINE_WORK_AREA.contains(location);
+    }
+
+    private void recoverMiningView(APIContext ctx, String targetLabel) {
+        long now = System.currentTimeMillis();
+        if (now < nextMiningViewRecoverAt || ctx.localPlayer().isMoving()) {
+            return;
+        }
+
+        nextMiningViewRecoverAt = now + ThreadLocalRandom.current().nextLong(2500L, 5001L);
+        ViewRecovery.recover(ctx, LUMBRIDGE_SWAMP_MINE_CENTER, targetLabel, this::log);
+    }
+
+    private void recoverFurnaceView(APIContext ctx, FurnaceTarget target) {
+        long now = System.currentTimeMillis();
+        if (now < nextFurnaceViewRecoverAt || ctx.localPlayer().isMoving()) {
+            return;
+        }
+
+        nextFurnaceViewRecoverAt = now + ThreadLocalRandom.current().nextLong(2500L, 5001L);
+        ViewRecovery.recover(ctx, target.tile, target.label + " furnace", this::log);
     }
 
     private boolean moveCloserToRock(APIContext ctx, SceneObject rock, Tile rockTile) {
@@ -784,6 +808,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
             log("No furnace found for bronze bars; expected id " + FURNACE_ID
                     + " at " + target.tile.getX() + "," + target.tile.getY()
                     + " (" + target.label + ")");
+            recoverFurnaceView(ctx, target);
             if (target.tile.tileDistanceTo(ctx) > 3) {
                 org.example.core.navigation.Navigation.walkTo(ctx, target.tile);
             }
@@ -851,7 +876,8 @@ public class MiningSmithingModule extends AbstractSkillingModule {
         }
 
         if (furnace == null || !furnace.isValid()) {
-            log("No furnace found while restarting Smithing after continue; repositioning");
+            log("No furnace found while restarting Smithing after continue; adjusting view");
+            recoverFurnaceView(ctx, target);
             restartSmeltingAfterContinue = true;
             stepToFurnaceStand(ctx, target);
             Time.sleep(800, 1200);

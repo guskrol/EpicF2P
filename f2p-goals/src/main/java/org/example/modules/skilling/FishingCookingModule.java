@@ -13,6 +13,7 @@ import com.epicbot.api.shared.util.time.Time;
 import org.example.core.ScriptStats;
 import org.example.core.SkillCapManager;
 import org.example.core.navigation.Navigation;
+import org.example.core.navigation.ViewRecovery;
 
 import java.awt.Point;
 import java.util.concurrent.ThreadLocalRandom;
@@ -228,6 +229,14 @@ public class FishingCookingModule extends AbstractSkillingModule {
         NPC fishingSpot = findNetFishingSpot(ctx, target);
 
         if (fishingSpot == null || !fishingSpot.isValid()) {
+            if (System.currentTimeMillis() >= nextFishingViewAdjustAt) {
+                nextFishingViewAdjustAt = System.currentTimeMillis()
+                        + ThreadLocalRandom.current().nextLong(2500L, 5001L);
+                log("No net fishing spot found; adjusting view before retry");
+                ViewRecovery.recover(ctx, target.area.getRandomTile(), "net fishing spot", this::log);
+                return;
+            }
+
             log("No net fishing spot found");
             Time.sleep(1000, 1600);
             return;
@@ -307,13 +316,8 @@ public class FishingCookingModule extends AbstractSkillingModule {
             return;
         }
 
-        int yaw = (ctx.camera().getYawDeg() + ThreadLocalRandom.current().nextInt(80, 181)) % 360;
-        int pitch = ThreadLocalRandom.current().nextInt(320, 381);
-        log("Fishing spot click covered/blocked; rotating camera");
-        ctx.camera().setYawDeg(yaw);
-        ctx.camera().setPitch(pitch);
-        ctx.mouse().moveOffScreen();
-        Time.sleep(700, 1300);
+        log("Fishing spot click covered/blocked; adjusting camera/zoom");
+        ViewRecovery.recover(ctx, target.area.getRandomTile(), "net fishing spot", this::log);
     }
 
     private void prepareCookingBatch(APIContext ctx) {
@@ -452,7 +456,8 @@ public class FishingCookingModule extends AbstractSkillingModule {
         SceneObject range = findReachableCookingObject(ctx, target);
 
         if (range == null || !range.isValid()) {
-            log("No reachable range/fire found for cooking at " + target.label);
+            log("No reachable range/fire found for cooking at " + target.label + "; adjusting view");
+            ViewRecovery.recover(ctx, AL_KHARID_RANGE_TILE, "cooking range", this::log);
             lastCookingActionAt = System.currentTimeMillis();
             stepToCookingStand(ctx, target);
             Time.sleep(1000, 1600);
@@ -553,7 +558,8 @@ public class FishingCookingModule extends AbstractSkillingModule {
         }
 
         if (range == null || !range.isValid()) {
-            log("No range found while restarting Cooking after continue; repositioning");
+            log("No range found while restarting Cooking after continue; adjusting view");
+            ViewRecovery.recover(ctx, AL_KHARID_RANGE_TILE, "cooking range", this::log);
             stepToCookingStand(ctx, target);
             Time.sleep(900, 1400);
             restartCookingAfterContinue = true;

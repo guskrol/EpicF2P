@@ -11,6 +11,7 @@ import com.epicbot.api.shared.util.time.Time;
 import org.example.core.ScriptStats;
 import org.example.core.SkillCapManager;
 import org.example.core.navigation.Navigation;
+import org.example.core.navigation.ViewRecovery;
 
 import java.awt.Point;
 import java.awt.Rectangle;
@@ -355,10 +356,8 @@ public class WoodcuttingFiremakingModule extends AbstractSkillingModule {
 
         nextTreeViewAdjustAt = System.currentTimeMillis() + ThreadLocalRandom.current().nextLong(2500L, 4501L);
         if (ThreadLocalRandom.current().nextInt(100) < 65) {
-            int yaw = (ctx.camera().getYawDeg() + ThreadLocalRandom.current().nextInt(70, 141)) % 360;
-            log("Tree click covered by UI; rotating camera");
-            ctx.camera().setYawDeg(yaw);
-            Time.sleep(600, 1100);
+            log("Tree click covered by UI; adjusting camera/zoom");
+            ViewRecovery.recover(ctx, area.getRandomTile(), "woodcutting tree", this::log);
             return;
         }
 
