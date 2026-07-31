@@ -1987,13 +1987,13 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
         logCombatDecision("FundingPlanner running " + fundingMethodLabel(decision.method())
                 + " for " + fundingTargetName());
-        switch (decision.method()) {
-            case BEER_GLASS -> beerGlassFundingModule.execute(ctx);
-            case MINING_SMITHING -> miningSmithingFundingModule.execute(ctx);
-            case FISHING_COOKING -> fishingCookingFundingModule.execute(ctx);
-            default -> {
-                // Woodcutting and stock sale are handled by the legacy combat funding path.
-            }
+        FundingPlanner.Method method = decision.method();
+        if (method == FundingPlanner.Method.BEER_GLASS) {
+            beerGlassFundingModule.execute(ctx);
+        } else if (method == FundingPlanner.Method.MINING_SMITHING) {
+            miningSmithingFundingModule.execute(ctx);
+        } else if (method == FundingPlanner.Method.FISHING_COOKING) {
+            fishingCookingFundingModule.execute(ctx);
         }
     }
 

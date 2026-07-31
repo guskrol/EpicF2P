@@ -584,21 +584,24 @@ public class CraftingModule extends AbstractSkillingModule {
 
         log("Crafting funding running " + fundingMethodLabel(decision.method())
                 + " for " + activeFundingTargetItem);
-        switch (decision.method()) {
-            case BEER_GLASS -> beerGlassFundingModule.execute(ctx);
-            case MINING_SMITHING -> miningSmithingFundingModule.execute(ctx);
-            case FISHING_COOKING -> fishingCookingFundingModule.execute(ctx);
-            case WOODCUTTING -> {
-                activeFundingDecision = new FundingPlanner.Decision(
-                        FundingPlanner.Method.BEER_GLASS,
-                        "Beer glass",
-                        0,
-                        0,
-                        0L
-                );
-                log("Crafting funding uses Beer glass fallback instead of generic WC funding");
-            }
-            default -> activeFundingDecision = null;
+        FundingPlanner.Method method = decision.method();
+        if (method == FundingPlanner.Method.BEER_GLASS) {
+            beerGlassFundingModule.execute(ctx);
+        } else if (method == FundingPlanner.Method.MINING_SMITHING) {
+            miningSmithingFundingModule.execute(ctx);
+        } else if (method == FundingPlanner.Method.FISHING_COOKING) {
+            fishingCookingFundingModule.execute(ctx);
+        } else if (method == FundingPlanner.Method.WOODCUTTING) {
+            activeFundingDecision = new FundingPlanner.Decision(
+                    FundingPlanner.Method.BEER_GLASS,
+                    "Beer glass",
+                    0,
+                    0,
+                    0L
+            );
+            log("Crafting funding uses Beer glass fallback instead of generic WC funding");
+        } else {
+            activeFundingDecision = null;
         }
     }
 
