@@ -13,7 +13,7 @@ public final class F2PItemRegistry {
         register(new ItemRule("Beer glass", true, false, 25, 20, false, false, true, 140));
         register(new ItemRule("Bronze bar", true, false, 220, 170, false, false, true, 50));
         register(new ItemRule("Logs", true, false, 35, 20, false, false, true, 100));
-        register(new ItemRule("Oak logs", true, false, 45, 30, false, false, true, 100));
+        register(new ItemRule("Oak logs", false, false, 45, 0, false, false, true, 0));
         register(new ItemRule("Willow logs", true, false, 35, 20, false, false, true, 100));
 
         register(new ItemRule("Cowhide", false, false, 0, 0, false, false, true, 0));
