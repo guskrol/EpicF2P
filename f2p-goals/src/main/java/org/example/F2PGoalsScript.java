@@ -14,6 +14,7 @@ import org.example.core.SkillCapManager;
 import org.example.core.runtime.AntibanController;
 import org.example.core.runtime.BreakController;
 import org.example.core.runtime.CameraZoomController;
+import org.example.core.runtime.DeathRecoveryController;
 import org.example.core.runtime.LoopWatchdogController;
 import org.example.core.runtime.RuntimeController;
 import org.example.core.runtime.WorldHopController;
@@ -37,7 +38,7 @@ import java.util.List;
 
 @ScriptManifest(name = "F2P Goals", gameType = GameType.OS)
 public class F2PGoalsScript extends Script {
-    private static final String SCRIPT_VERSION = "v0.4.231-enum-switch-class-fix";
+    private static final String SCRIPT_VERSION = "v0.4.232-death-recovery";
     private static final boolean QUEST_TEST_ONLY = false;
     private static final boolean RANGED_TEST_ONLY = false;
     private static final boolean MAGIC_TEST_ONLY = false;
@@ -166,10 +167,12 @@ public class F2PGoalsScript extends Script {
         boolean lightweightTestMode = QUEST_TEST_ONLY || CRAFTING_TEST_ONLY;
         List<RuntimeController> runtimeModules = lightweightTestMode
                 ? List.of(
+                        new DeathRecoveryController(this::logInfo, stats),
                         new LoopWatchdogController(this::logInfo, stats, SCRIPT_VERSION, goalManagerModule::requestReroll),
                         new CameraZoomController(this::logInfo)
                 )
                 : List.of(
+                        new DeathRecoveryController(this::logInfo, stats),
                         new LoopWatchdogController(this::logInfo, stats, SCRIPT_VERSION, goalManagerModule::requestReroll),
                         new CameraZoomController(this::logInfo),
                         BreakController.normal(this::logInfo, stats),
