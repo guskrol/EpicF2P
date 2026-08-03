@@ -1993,7 +1993,8 @@ public class LumbridgeCowCombatModule implements F2PModule {
         } else if (method == FundingPlanner.Method.MINING_SMITHING) {
             miningSmithingFundingModule.execute(ctx);
         } else if (method == FundingPlanner.Method.FISHING_COOKING) {
-            fishingCookingFundingModule.execute(ctx);
+            log("Fishing/Cooking is food training, not GP funding; rerolling funding method");
+            activeFundingDecision = null;
         }
     }
 

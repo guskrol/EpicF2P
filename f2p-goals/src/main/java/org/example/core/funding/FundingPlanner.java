@@ -121,13 +121,11 @@ public class FundingPlanner {
         if (roll < 55) {
             return new Decision(Method.BEER_GLASS, "Beer glass", 0, 0, 0L);
         }
-        if (roll < 75) {
+        if (roll < 80) {
             return new Decision(Method.WOODCUTTING, "Logs", 0, 0, 0L);
         }
-        if (roll < 90) {
-            return new Decision(Method.MINING_SMITHING, "Bronze bar", 0, 0, 0L);
-        }
-        return new Decision(Method.FISHING_COOKING, "Shrimps", 0, 0, 0L);
+        // Fishing/Cooking produces food, not sellable GP stock for locked-GE accounts.
+        return new Decision(Method.MINING_SMITHING, "Bronze bar", 0, 0, 0L);
     }
 
     public int randomBufferCoins(int baseBuffer) {

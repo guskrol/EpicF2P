@@ -590,7 +590,8 @@ public class CraftingModule extends AbstractSkillingModule {
         } else if (method == FundingPlanner.Method.MINING_SMITHING) {
             miningSmithingFundingModule.execute(ctx);
         } else if (method == FundingPlanner.Method.FISHING_COOKING) {
-            fishingCookingFundingModule.execute(ctx);
+            log("Crafting funding received Fishing/Cooking, which cannot fund GP; rerolling funding method");
+            activeFundingDecision = null;
         } else if (method == FundingPlanner.Method.WOODCUTTING) {
             activeFundingDecision = new FundingPlanner.Decision(
                     FundingPlanner.Method.BEER_GLASS,
