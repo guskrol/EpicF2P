@@ -12,8 +12,10 @@ import org.example.core.ScriptStats;
 
 import java.awt.Point;
 import java.awt.event.KeyEvent;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.function.Consumer;
 
 public class DeathRecoveryController implements RuntimeController {
@@ -59,6 +61,17 @@ public class DeathRecoveryController implements RuntimeController {
             "how do i",
             "death"
     };
+    private static final String[] FIRST_DEATH_DIALOGUE_PRIORITY = {
+            "what happened",
+            "where am i",
+            "where are my items",
+            "items",
+            "reclaim",
+            "grave",
+            "gravestone",
+            "how do i",
+            "death"
+    };
     private static final String[] WIDGET_BUTTON_PRIORITY = {
             "take all",
             "reclaim",
@@ -97,6 +110,10 @@ public class DeathRecoveryController implements RuntimeController {
     private long nextRecoveryLogAt;
     private boolean spokeToDeathThisVisit;
     private boolean sawDialogueThisVisit;
+    private boolean sawDeathNpcThisVisit;
+    private boolean sawDeathDialogueOptionsThisVisit;
+    private boolean firstDeathDialogueCompleteThisVisit;
+    private final Set<String> completedDeathDialogueOptions = new HashSet<>();
 
     public DeathRecoveryController(Consumer<String> logger, ScriptStats stats) {
         this.logger = logger;
@@ -115,10 +132,15 @@ public class DeathRecoveryController implements RuntimeController {
             return false;
         }
 
+        NPC death = findDeathNpc(ctx);
+        if (death != null) {
+            sawDeathNpcThisVisit = true;
+        }
+
         boolean deathContext = isLocalPlayerDead(ctx)
                 || hasDeathInterfaceOpen(ctx)
-                || findDeathNpc(ctx) != null
-                || hasDeathContextWidgetText(ctx);
+                || death != null
+                || hasDeathDialogueOption(ctx);
         if (!deathContext) {
             resetVisitState();
             return false;
@@ -148,6 +170,9 @@ public class DeathRecoveryController implements RuntimeController {
         }
 
         NPC death = findDeathNpc(ctx);
+        if (death != null) {
+            sawDeathNpcThisVisit = true;
+        }
         if (shouldTalkToDeath(death) && talkToDeath(ctx, death)) {
             return;
         }
@@ -166,7 +191,9 @@ public class DeathRecoveryController implements RuntimeController {
     }
 
     private boolean handleDeathDialogue(APIContext ctx) {
-        if (!ctx.dialogues().isDialogueOpen() && !ctx.dialogues().isChatOpen()) {
+        if (!ctx.dialogues().isDialogueOpen()
+                && !ctx.dialogues().canContinue()
+                && ctx.dialogues().getOptions().isEmpty()) {
             return false;
         }
 
@@ -183,25 +210,25 @@ public class DeathRecoveryController implements RuntimeController {
             return true;
         }
 
-        for (String option : DIALOGUE_OPTION_PRIORITY) {
-            if (selectDialogueOptionContaining(ctx, option)) {
+        if (!ctx.dialogues().getOptions().isEmpty()) {
+            sawDeathDialogueOptionsThisVisit = true;
+            if (handleFirstDeathDialogueOptions(ctx)) {
                 return true;
             }
         }
 
-        if (!ctx.dialogues().getOptions().isEmpty()) {
-            setStatus("Death recovery: selecting safe Death dialogue option");
-            logger.accept("[DeathRecovery] Selecting fallback non-negative Death dialogue option");
-            if (!ctx.dialogues().selectOption(text -> text != null && !isNegativeOption(text))) {
-                clickFirstNonNegativeDialogueOption(ctx);
+        if (firstDeathDialogueCompleteThisVisit) {
+            for (String option : DIALOGUE_OPTION_PRIORITY) {
+                if (selectDialogueOptionContaining(ctx, option)) {
+                    return true;
+                }
             }
-            Time.sleep(650, 1000);
-            return true;
         }
 
-        logThrottled("Death recovery dialogue is open but no selectable action was found");
-        Time.sleep(650, 1000);
-        return true;
+        logThrottled("Death recovery saw an empty dialogue state; releasing runtime until a real death context appears");
+        resetVisitState();
+        Time.sleep(300, 500);
+        return false;
     }
 
     private boolean handleDeathInterface(APIContext ctx) {
@@ -236,7 +263,9 @@ public class DeathRecoveryController implements RuntimeController {
             }
         }
 
-        if (!ctx.dialogues().isDialogueOpen() && !ctx.dialogues().isChatOpen()) {
+        if (!ctx.dialogues().isDialogueOpen()
+                && !ctx.dialogues().canContinue()
+                && ctx.dialogues().getOptions().isEmpty()) {
             setStatus("Death recovery: closing death interface");
             logger.accept("[DeathRecovery] Closing death interface after no reclaim button was found");
             ctx.widgets().closeInterface();
@@ -463,6 +492,9 @@ public class DeathRecoveryController implements RuntimeController {
         if (death == null) {
             return false;
         }
+        if (!firstDeathDialogueCompleteThisVisit) {
+            return System.currentTimeMillis() - lastDeathTalkAt > 2_500L;
+        }
         if (!spokeToDeathThisVisit) {
             return true;
         }
@@ -473,6 +505,10 @@ public class DeathRecoveryController implements RuntimeController {
 
     private boolean canTryExitPortal(NPC death) {
         if (ctxStillInDialogueCooldown()) {
+            return false;
+        }
+        if (sawDeathNpcThisVisit && !firstDeathDialogueCompleteThisVisit) {
+            logThrottled("Death recovery is waiting to finish the first Death dialogue before using the portal");
             return false;
         }
         return death == null || spokeToDeathThisVisit || sawDialogueThisVisit;
@@ -486,14 +522,17 @@ public class DeathRecoveryController implements RuntimeController {
         return isLocalPlayerDead(ctx)
                 || hasDeathInterfaceOpen(ctx)
                 || findDeathNpc(ctx) != null
-                || hasDeathContextWidgetText(ctx);
+                || hasDeathDialogueOption(ctx);
     }
 
     private boolean hasDeathInterfaceOpen(APIContext ctx) {
         for (int groupId : DEATH_INTERFACE_GROUPS) {
             try {
                 WidgetGroup group = ctx.widgets().get(groupId);
-                if (group != null && group.isValid() && group.isVisible()) {
+                if (group != null
+                        && group.isValid()
+                        && group.isVisible()
+                        && hasDeathInterfaceContent(ctx, groupId)) {
                     return true;
                 }
             } catch (RuntimeException ignored) {
@@ -503,15 +542,160 @@ public class DeathRecoveryController implements RuntimeController {
         return false;
     }
 
-    private boolean hasDeathContextWidgetText(APIContext ctx) {
-        for (String marker : DEATH_WIDGET_MARKERS) {
-            String needle = normalize(marker);
-            for (WidgetChild widget : ctx.widgets().getAllChildren(candidate ->
-                    isVisibleWidget(candidate) && normalize(visibleText(candidate)).contains(needle))) {
+    private boolean hasDeathInterfaceContent(APIContext ctx, int groupId) {
+        if (hasKnownDeathActionButton(ctx, groupId)) {
+            return true;
+        }
+
+        for (WidgetChild widget : ctx.widgets().getAllChildren(candidate ->
+                isVisibleWidget(candidate)
+                        && candidate.getGroup() != null
+                        && candidate.getGroup().getIndex() == groupId)) {
+            if (hasDeathMarker(visibleText(widget))) {
                 return true;
             }
         }
         return false;
+    }
+
+    private boolean hasKnownDeathActionButton(APIContext ctx, int groupId) {
+        if (groupId == InterfaceID.DEATH_OFFICE
+                && isVisibleWidget(ctx.widgets().get(groupId, childId(InterfaceID.DeathOffice.TAKEALL)))) {
+            return true;
+        }
+        if (groupId == InterfaceID.GRAVESTONE_RETRIEVAL
+                && isVisibleWidget(ctx.widgets().get(groupId, childId(InterfaceID.GravestoneRetrieval.BUTTON)))) {
+            return true;
+        }
+        if (groupId == InterfaceID.GRAVESTONE_GENERIC
+                && (isVisibleWidget(ctx.widgets().get(groupId, childId(InterfaceID.GravestoneGeneric.FREEBUTTON)))
+                || isVisibleWidget(ctx.widgets().get(groupId, childId(InterfaceID.GravestoneGeneric.PAYBUTTON))))) {
+            return true;
+        }
+        return false;
+    }
+
+    private boolean hasDeathDialogueOption(APIContext ctx) {
+        if (!ctx.dialogues().isDialogueOpen() && ctx.dialogues().getOptions().isEmpty()) {
+            return false;
+        }
+
+        for (WidgetChild option : ctx.dialogues().getOptions()) {
+            String text = normalize(visibleText(option));
+            if (text.contains("death")
+                    || text.contains("grave")
+                    || text.contains("reclaim")
+                    || text.contains("items")
+                    || text.contains("what happened")
+                    || text.contains("where am i")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean handleFirstDeathDialogueOptions(APIContext ctx) {
+        WidgetChild nextTopic = firstUnvisitedInformativeDeathOption(ctx);
+        if (nextTopic != null) {
+            return selectAndRememberDeathOption(ctx, nextTopic, "Death first-dialogue topic");
+        }
+
+        WidgetChild backOption = firstDialogueOptionMatching(ctx, this::isBackOption);
+        if (backOption != null) {
+            return selectDeathOption(ctx, backOption, "Death dialogue back option", false);
+        }
+
+        if (!firstDeathDialogueCompleteThisVisit) {
+            firstDeathDialogueCompleteThisVisit = true;
+            logger.accept("[DeathRecovery] First Death dialogue options completed");
+        }
+
+        WidgetChild exitOption = firstDialogueOptionMatching(ctx, this::isExitDialogueOption);
+        if (exitOption != null) {
+            return selectDeathOption(ctx, exitOption, "Death dialogue final exit option", true);
+        }
+
+        return false;
+    }
+
+    private WidgetChild firstUnvisitedInformativeDeathOption(APIContext ctx) {
+        for (String priority : FIRST_DEATH_DIALOGUE_PRIORITY) {
+            String needle = normalize(priority);
+            for (WidgetChild option : ctx.dialogues().getOptions()) {
+                String text = normalize(visibleText(option));
+                if (text.contains(needle)
+                        && isInformativeDeathDialogueOption(text)
+                        && !completedDeathDialogueOptions.contains(text)) {
+                    return option;
+                }
+            }
+        }
+
+        for (WidgetChild option : ctx.dialogues().getOptions()) {
+            String text = normalize(visibleText(option));
+            if (isInformativeDeathDialogueOption(text)
+                    && !completedDeathDialogueOptions.contains(text)) {
+                return option;
+            }
+        }
+
+        return null;
+    }
+
+    private WidgetChild firstDialogueOptionMatching(APIContext ctx, DialogueOptionMatcher matcher) {
+        for (WidgetChild option : ctx.dialogues().getOptions()) {
+            if (matcher.matches(normalize(visibleText(option)))) {
+                return option;
+            }
+        }
+        return null;
+    }
+
+    private boolean selectAndRememberDeathOption(APIContext ctx, WidgetChild option, String label) {
+        return selectDeathOption(ctx, option, label, true);
+    }
+
+    private boolean selectDeathOption(APIContext ctx, WidgetChild option, String label, boolean remember) {
+        String text = normalize(visibleText(option));
+        setStatus("Death recovery: selecting Death dialogue");
+        logger.accept("[DeathRecovery] Selecting " + label + ": " + visibleText(option));
+        boolean selected = clickWidgetCenter(ctx, option)
+                || option.click(false)
+                || ctx.dialogues().selectOption(candidate -> normalize(candidate).equals(text));
+        if (selected) {
+            if (remember && !text.isBlank()) {
+                completedDeathDialogueOptions.add(text);
+            }
+            Time.sleep(650, 1000);
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isInformativeDeathDialogueOption(String text) {
+        return !text.isBlank()
+                && !isNegativeOption(text)
+                && !isBackOption(text)
+                && !isExitDialogueOption(text);
+    }
+
+    private boolean isBackOption(String text) {
+        return text.equals("back")
+                || text.contains("go back")
+                || text.contains("previous");
+    }
+
+    private boolean isExitDialogueOption(String text) {
+        return text.contains("leave")
+                || text.contains("return")
+                || text.contains("take me")
+                || text.contains("send me")
+                || text.contains("can i leave")
+                || text.contains("goodbye")
+                || text.contains("that's all")
+                || text.contains("thats all")
+                || text.contains("nothing else")
+                || text.contains("no more");
     }
 
     private List<WidgetChild> visibleDeathWidgets(APIContext ctx) {
@@ -525,7 +709,7 @@ public class DeathRecoveryController implements RuntimeController {
                     return true;
                 }
             }
-            return hasDeathMarker(visibleText(widget));
+            return false;
         });
     }
 
@@ -566,6 +750,10 @@ public class DeathRecoveryController implements RuntimeController {
         nextPortalClickAt = 0L;
         spokeToDeathThisVisit = false;
         sawDialogueThisVisit = false;
+        sawDeathNpcThisVisit = false;
+        sawDeathDialogueOptionsThisVisit = false;
+        firstDeathDialogueCompleteThisVisit = false;
+        completedDeathDialogueOptions.clear();
         logger.accept("[DeathRecovery] Death context detected; taking over runtime");
     }
 
@@ -577,6 +765,10 @@ public class DeathRecoveryController implements RuntimeController {
         nextRecoveryLogAt = 0L;
         spokeToDeathThisVisit = false;
         sawDialogueThisVisit = false;
+        sawDeathNpcThisVisit = false;
+        sawDeathDialogueOptionsThisVisit = false;
+        firstDeathDialogueCompleteThisVisit = false;
+        completedDeathDialogueOptions.clear();
     }
 
     private void clearInteractionState(APIContext ctx) {
@@ -669,5 +861,9 @@ public class DeathRecoveryController implements RuntimeController {
 
     private static int childId(int packedWidgetId) {
         return packedWidgetId & 0xFFFF;
+    }
+
+    private interface DialogueOptionMatcher {
+        boolean matches(String normalizedText);
     }
 }
