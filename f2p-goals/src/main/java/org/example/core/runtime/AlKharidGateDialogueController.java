@@ -15,16 +15,6 @@ import java.util.function.Consumer;
 
 public class AlKharidGateDialogueController implements RuntimeController {
     private static final Area AL_KHARID_TOLL_GATE_AREA = new Area(3258, 3216, 3276, 3238);
-    private static final String[] PAY_OPTION_MARKERS = {
-            "pay",
-            "okay",
-            "ok",
-            "yes",
-            "pass",
-            "come through",
-            "go through",
-            "open"
-    };
     private static final long LOG_INTERVAL_MILLIS = 6_000L;
 
     private final Consumer<String> logger;
@@ -38,7 +28,7 @@ public class AlKharidGateDialogueController implements RuntimeController {
 
     @Override
     public String name() {
-        return "runtime.al_kharid_gate_dialogue";
+        return "runtime.al_kharid_gate_avoidance";
     }
 
     @Override
@@ -55,22 +45,22 @@ public class AlKharidGateDialogueController implements RuntimeController {
 
     @Override
     public void execute(APIContext ctx) {
-        setStatus("Al Kharid gate: handling toll dialogue");
+        setStatus("Al Kharid gate: cancelling toll dialogue");
         clearInteractionState(ctx);
 
-        WidgetChild payOption = findPayOption(ctx);
-        if (payOption != null) {
-            logThrottled("Selecting Al Kharid gate pay/pass option: " + visibleText(payOption));
-            if (clickWidgetCenter(ctx, payOption)
-                    || payOption.click(false)
-                    || ctx.dialogues().selectOption(text -> isPayOption(text))) {
+        WidgetChild negativeOption = firstNegativeOption(ctx);
+        if (negativeOption != null) {
+            logThrottled("Cancelling Al Kharid gate option: " + visibleText(negativeOption));
+            if (clickWidgetCenter(ctx, negativeOption)
+                    || negativeOption.click(false)
+                    || ctx.dialogues().selectOption(text -> isNegativeOption(text))) {
                 Time.sleep(700, 1100);
                 return;
             }
         }
 
         if (ctx.dialogues().canContinue()) {
-            logThrottled("Continuing Al Kharid gate dialogue");
+            logThrottled("Continuing Al Kharid gate dialogue until cancel option appears");
             if (!ctx.dialogues().selectContinue()) {
                 clickContinueWidget(ctx);
                 ctx.keyboard().sendKey(KeyEvent.VK_SPACE);
@@ -79,28 +69,17 @@ public class AlKharidGateDialogueController implements RuntimeController {
             return;
         }
 
-        WidgetChild fallbackOption = firstNonNegativeOption(ctx);
-        if (fallbackOption != null) {
-            logThrottled("Selecting fallback Al Kharid gate option: " + visibleText(fallbackOption));
-            if (clickWidgetCenter(ctx, fallbackOption)
-                    || fallbackOption.click(false)
-                    || ctx.dialogues().selectOption(text -> !isNegativeOption(text))) {
-                Time.sleep(700, 1100);
-                return;
-            }
-        }
-
         WidgetChild continueWidget = findContinueTextWidget(ctx);
         if (continueWidget != null) {
-            logThrottled("Clicking Al Kharid gate continue widget");
+            logThrottled("Clicking Al Kharid gate continue widget before cancelling");
             if (clickWidgetCenter(ctx, continueWidget) || continueWidget.click(false)) {
                 Time.sleep(650, 1000);
                 return;
             }
         }
 
-        logThrottled("Al Kharid gate dialogue detected but no widget clicked; sending space");
-        ctx.keyboard().sendKey(KeyEvent.VK_SPACE);
+        logThrottled("Al Kharid gate dialogue detected; closing it without paying");
+        ctx.keyboard().sendKey(KeyEvent.VK_ESCAPE);
         Time.sleep(650, 1000);
     }
 
@@ -109,35 +88,13 @@ public class AlKharidGateDialogueController implements RuntimeController {
         return location != null && AL_KHARID_TOLL_GATE_AREA.contains(location);
     }
 
-    private WidgetChild findPayOption(APIContext ctx) {
+    private WidgetChild firstNegativeOption(APIContext ctx) {
         for (WidgetChild option : ctx.dialogues().getOptions()) {
-            if (isPayOption(visibleText(option))) {
+            if (isNegativeOption(visibleText(option))) {
                 return option;
             }
         }
         return null;
-    }
-
-    private WidgetChild firstNonNegativeOption(APIContext ctx) {
-        for (WidgetChild option : ctx.dialogues().getOptions()) {
-            if (!isNegativeOption(visibleText(option))) {
-                return option;
-            }
-        }
-        return null;
-    }
-
-    private boolean isPayOption(String text) {
-        String normalized = normalize(text);
-        if (normalized.isBlank() || isNegativeOption(normalized)) {
-            return false;
-        }
-        for (String marker : PAY_OPTION_MARKERS) {
-            if (normalized.contains(marker)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private boolean isNegativeOption(String text) {
