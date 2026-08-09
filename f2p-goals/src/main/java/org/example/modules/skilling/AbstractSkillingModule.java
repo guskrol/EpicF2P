@@ -27,6 +27,10 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
     private int pendingToolBuyPrice;
     private long toolPurchaseRetryAt;
     private long pendingToolOfferCheckAt;
+    private int cleanInventoryDepositAttempts;
+    private int cleanInventoryLastNonKeepCount = -1;
+    private long cleanInventoryBypassUntil;
+    private String cleanInventoryBypassSignature = "";
 
     AbstractSkillingModule(Consumer<String> logger, ScriptStats stats, SkillCapManager caps) {
         this.logger = logger;
@@ -426,8 +430,21 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
             return false;
         }
 
-        if (inventoryOnlyContains(ctx, keepNames)) {
+        int nonKeepCount = nonKeptInventoryCount(ctx, keepNames);
+        if (nonKeepCount <= 0) {
+            resetCleanInventoryState();
             return false;
+        }
+
+        String currentSignature = nonKeptInventorySignature(ctx, keepNames);
+        long now = System.currentTimeMillis();
+        if (now < cleanInventoryBypassUntil && currentSignature.equals(cleanInventoryBypassSignature)) {
+            return false;
+        }
+        if (!currentSignature.equals(cleanInventoryBypassSignature)) {
+            cleanInventoryBypassUntil = 0L;
+            cleanInventoryDepositAttempts = 0;
+            cleanInventoryLastNonKeepCount = -1;
         }
 
         if (!isBankOpen(ctx)) {
@@ -444,11 +461,43 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
             return true;
         }
 
+        int beforeCount = nonKeptInventoryCount(ctx, keepNames);
         log("Depositing inventory before skilling");
-        ctx.bank().depositInventory();
-        Time.sleep(600, 900);
-        ctx.bank().close();
-        Time.sleep(500, 800);
+        ctx.bank().depositAllExcept(keepNames);
+        Time.sleep(700, 1100, () -> nonKeptInventoryCount(ctx, keepNames) <= 0, 100);
+        if (nonKeptInventoryCount(ctx, keepNames) > 0) {
+            depositNonKeptInventoryByName(ctx, keepNames);
+            Time.sleep(700, 1100, () -> nonKeptInventoryCount(ctx, keepNames) <= 0, 100);
+        }
+
+        int afterCount = nonKeptInventoryCount(ctx, keepNames);
+        if (afterCount <= 0) {
+            resetCleanInventoryState();
+            ctx.bank().close();
+            Time.sleep(500, 800, () -> !isBankOpen(ctx), 100);
+            return true;
+        }
+
+        if (cleanInventoryLastNonKeepCount >= 0
+                && afterCount >= cleanInventoryLastNonKeepCount
+                && afterCount >= beforeCount) {
+            cleanInventoryDepositAttempts++;
+        } else {
+            cleanInventoryDepositAttempts = 1;
+        }
+        cleanInventoryLastNonKeepCount = afterCount;
+
+        if (cleanInventoryDepositAttempts >= 3) {
+            String leftovers = describeNonKeptInventory(ctx, keepNames);
+            log("Inventory cleanup still has " + leftovers + "; continuing to avoid bank loop");
+            cleanInventoryBypassSignature = currentSignature;
+            cleanInventoryBypassUntil = System.currentTimeMillis() + 5 * 60_000L;
+            resetCleanInventoryAttemptCounters();
+            ctx.bank().close();
+            Time.sleep(500, 800, () -> !isBankOpen(ctx), 100);
+            return false;
+        }
+
         return true;
     }
 
@@ -490,17 +539,76 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
         return false;
     }
 
-    private boolean inventoryOnlyContains(APIContext ctx, String... allowedNames) {
+    private void depositNonKeptInventoryByName(APIContext ctx, String... keepNames) {
         for (ItemWidget item : ctx.inventory().getItems()) {
             if (item == null || item.getName() == null || item.getName().isBlank()) {
                 continue;
             }
 
-            if (!matchesAny(item.getName(), allowedNames)) {
-                return false;
+            if (!matchesAny(item.getName(), keepNames)) {
+                ctx.bank().depositAll(item.getName());
+                Time.sleep(120, 220);
             }
         }
-        return true;
+    }
+
+    private int nonKeptInventoryCount(APIContext ctx, String... keepNames) {
+        int count = 0;
+        for (ItemWidget item : ctx.inventory().getItems()) {
+            if (item == null || item.getName() == null || item.getName().isBlank()) {
+                continue;
+            }
+
+            if (!matchesAny(item.getName(), keepNames)) {
+                count += Math.max(1, item.getStackSize());
+            }
+        }
+        return count;
+    }
+
+    private String nonKeptInventorySignature(APIContext ctx, String... keepNames) {
+        StringBuilder signature = new StringBuilder();
+        for (ItemWidget item : ctx.inventory().getItems()) {
+            if (item == null || item.getName() == null || item.getName().isBlank()) {
+                continue;
+            }
+
+            if (!matchesAny(item.getName(), keepNames)) {
+                signature.append(normalizedName(item.getName()))
+                        .append(':')
+                        .append(Math.max(1, item.getStackSize()))
+                        .append('|');
+            }
+        }
+        return signature.toString();
+    }
+
+    private String describeNonKeptInventory(APIContext ctx, String... keepNames) {
+        StringBuilder items = new StringBuilder();
+        for (ItemWidget item : ctx.inventory().getItems()) {
+            if (item == null || item.getName() == null || item.getName().isBlank()) {
+                continue;
+            }
+
+            if (!matchesAny(item.getName(), keepNames)) {
+                if (items.length() > 0) {
+                    items.append(", ");
+                }
+                items.append(item.getName()).append(" x").append(Math.max(1, item.getStackSize()));
+            }
+        }
+        return items.length() == 0 ? "unknown inventory leftovers" : items.toString();
+    }
+
+    private void resetCleanInventoryState() {
+        cleanInventoryBypassUntil = 0L;
+        cleanInventoryBypassSignature = "";
+        resetCleanInventoryAttemptCounters();
+    }
+
+    private void resetCleanInventoryAttemptCounters() {
+        cleanInventoryDepositAttempts = 0;
+        cleanInventoryLastNonKeepCount = -1;
     }
 
     private boolean matchesAny(String itemName, String... allowedNames) {

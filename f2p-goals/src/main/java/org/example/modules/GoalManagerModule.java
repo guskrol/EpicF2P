@@ -1,6 +1,7 @@
 package org.example.modules;
 
 import com.epicbot.api.shared.APIContext;
+import com.epicbot.api.shared.entity.ItemWidget;
 import com.epicbot.api.shared.entity.WidgetChild;
 import com.epicbot.api.shared.util.time.Time;
 import org.example.core.F2PModule;
@@ -336,8 +337,7 @@ public class GoalManagerModule implements F2PModule {
 
         int beforeCount = ctx.inventory().getCount();
         log("Preparing " + target + ": depositing leftover inventory from previous task");
-        ctx.bank().depositInventory();
-        Time.sleep(700, 1100, () -> ctx.inventory().getCount() <= 0, 100);
+        depositInventoryWithItemFallback(ctx);
 
         if (ctx.inventory().getCount() <= 0) {
             clearInventoryCleanup();
@@ -356,6 +356,23 @@ public class GoalManagerModule implements F2PModule {
         }
 
         return true;
+    }
+
+    private void depositInventoryWithItemFallback(APIContext ctx) {
+        ctx.bank().depositInventory();
+        Time.sleep(700, 1100, () -> ctx.inventory().getCount() <= 0, 100);
+        if (ctx.inventory().getCount() <= 0) {
+            return;
+        }
+
+        for (ItemWidget item : ctx.inventory().getItems()) {
+            if (item == null || item.getName() == null || item.getName().isBlank()) {
+                continue;
+            }
+            ctx.bank().depositAll(item.getName());
+            Time.sleep(120, 220);
+        }
+        Time.sleep(700, 1100, () -> ctx.inventory().getCount() <= 0, 100);
     }
 
     private void markInventoryCleanupPending(String target) {

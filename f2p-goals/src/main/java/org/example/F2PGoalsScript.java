@@ -39,7 +39,7 @@ import java.util.List;
 
 @ScriptManifest(name = "F2P Goals", gameType = GameType.OS)
 public class F2PGoalsScript extends Script {
-    private static final String SCRIPT_VERSION = "v0.4.235-death-gate-dialogues";
+    private static final String SCRIPT_VERSION = "v0.4.236-disable-cooks-cleanup-loop";
     private static final boolean QUEST_TEST_ONLY = false;
     private static final boolean RANGED_TEST_ONLY = false;
     private static final boolean MAGIC_TEST_ONLY = false;
@@ -125,7 +125,6 @@ public class F2PGoalsScript extends Script {
                     new CombatTrainingModule(combatModule, skillCaps),
                     new RangedCombatTrainingModule(rangedCombatModule),
                     magicModule,
-                    cookAssistantQuestModule,
                     new WoodcuttingFiremakingModule(this::logInfo, stats, skillCaps),
                     fishingCookingModule,
                     miningSmithingModule,

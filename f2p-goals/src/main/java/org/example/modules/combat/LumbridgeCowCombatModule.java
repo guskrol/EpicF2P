@@ -3786,8 +3786,10 @@ public class LumbridgeCowCombatModule implements F2PModule {
             if (isBankOpen(ctx)) {
                 log("Closing bank to equip " + best.name);
                 closeBank(ctx);
-                Time.sleep(500, 800);
-                return true;
+                Time.sleep(700, 1100, () -> !isBankOpen(ctx), 100);
+                if (isBankOpen(ctx)) {
+                    return true;
+                }
             }
 
             if (!ctx.tabs().isOpen(ITabsAPI.Tabs.INVENTORY)) {
