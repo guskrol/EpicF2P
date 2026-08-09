@@ -15,9 +15,9 @@ public final class Navigation {
     private static final int LUMBRIDGE_MAX_Y = 3315;
     private static final Area DESERT_P2P_BANK_AVOID_AREA = new Area(3295, 3105, 3336, 3150);
     private static final Area AL_KHARID_F2P_BANK_AREA = new Area(3268, 3161, 3274, 3173);
-    private static final Tile AL_KHARID_GATE_BYPASS_WEST_TILE = new Tile(3226, 3146, 0);
-    private static final Tile AL_KHARID_GATE_BYPASS_SOUTH_TILE = new Tile(3258, 3146, 0);
-    private static final Tile AL_KHARID_GATE_BYPASS_EAST_TILE = new Tile(3272, 3162, 0);
+    private static final Tile AL_KHARID_GATE_NORTH_WEST_TILE = new Tile(3256, 3268, 0);
+    private static final Tile AL_KHARID_GATE_NORTH_GAP_TILE = new Tile(3270, 3283, 0);
+    private static final Tile AL_KHARID_GATE_NORTH_EAST_TILE = new Tile(3282, 3238, 0);
     private static final Tile[] AL_KHARID_F2P_BANK_TILES = {
             new Tile(3270, 3167, 0),
             new Tile(3271, 3167, 0),
@@ -106,27 +106,27 @@ public final class Navigation {
     }
 
     private static Tile nextWestToEastBypassWaypoint(Tile location) {
-        if (location.getX() < 3238 || location.getY() > 3165) {
-            return AL_KHARID_GATE_BYPASS_WEST_TILE;
+        if (location.getY() < 3264 || location.getX() < 3248) {
+            return AL_KHARID_GATE_NORTH_WEST_TILE;
         }
-        if (location.getX() < 3263) {
-            return AL_KHARID_GATE_BYPASS_SOUTH_TILE;
+        if (location.getX() < 3268 || location.getY() < 3278) {
+            return AL_KHARID_GATE_NORTH_GAP_TILE;
         }
-        if (location.getX() < 3271 || location.getY() < 3160) {
-            return AL_KHARID_GATE_BYPASS_EAST_TILE;
+        if (location.getY() > 3242 || location.getX() < 3280) {
+            return AL_KHARID_GATE_NORTH_EAST_TILE;
         }
         return null;
     }
 
     private static Tile nextEastToWestBypassWaypoint(Tile location) {
-        if (location.getX() > 3274 || location.getY() > 3168) {
-            return AL_KHARID_GATE_BYPASS_EAST_TILE;
+        if (location.getY() < 3236 || location.getX() > 3286) {
+            return AL_KHARID_GATE_NORTH_EAST_TILE;
         }
-        if (location.getX() > 3258) {
-            return AL_KHARID_GATE_BYPASS_SOUTH_TILE;
+        if (location.getX() > 3267 || location.getY() < 3278) {
+            return AL_KHARID_GATE_NORTH_GAP_TILE;
         }
-        if (location.getX() > 3238 || location.getY() < 3160) {
-            return AL_KHARID_GATE_BYPASS_WEST_TILE;
+        if (location.getX() > 3248 || location.getY() > 3264) {
+            return AL_KHARID_GATE_NORTH_WEST_TILE;
         }
         return null;
     }
@@ -143,7 +143,7 @@ public final class Navigation {
                 && tile.getX() >= 3268
                 && tile.getX() <= 3338
                 && tile.getY() >= 3105
-                && tile.getY() <= 3238;
+                && tile.getY() <= 3305;
     }
 
     public static boolean isInLumbridgeRegion(APIContext ctx) {

@@ -37,6 +37,14 @@ public class AlKharidGateDialogueController implements RuntimeController {
             return false;
         }
 
+        boolean dialogueOpen = ctx.dialogues().isDialogueOpen()
+                || ctx.dialogues().isChatOpen()
+                || ctx.dialogues().canContinue()
+                || !ctx.dialogues().getOptions().isEmpty();
+        if (!dialogueOpen) {
+            return false;
+        }
+
         return ctx.dialogues().canContinue()
                 || !ctx.dialogues().getOptions().isEmpty()
                 || findContinueTextWidget(ctx) != null
@@ -109,8 +117,7 @@ public class AlKharidGateDialogueController implements RuntimeController {
 
     private boolean hasGateTextWidget(APIContext ctx) {
         return findVisibleWidgetTextContaining(ctx, "toll") != null
-                || findVisibleWidgetTextContaining(ctx, "10 coins") != null
-                || findVisibleWidgetTextContaining(ctx, "al kharid") != null;
+                || findVisibleWidgetTextContaining(ctx, "10 coins") != null;
     }
 
     private boolean clickContinueWidget(APIContext ctx) {
