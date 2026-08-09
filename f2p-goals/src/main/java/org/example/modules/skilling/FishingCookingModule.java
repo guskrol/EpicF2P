@@ -44,7 +44,6 @@ public class FishingCookingModule extends AbstractSkillingModule {
     };
     private static final int FULL_INVENTORY_SIZE = 28;
     private static final int MIN_RAW_FISH_BEFORE_COOKING = 100;
-    private static final int AL_KHARID_GATE_COINS = 10;
     private static final int INVENTORY_WIDGET_GROUP = 149;
     private static final int SKILLMULTI_GROUP = InterfaceID.SKILLMULTI;
     private static final int SKILLMULTI_ALL_CHILD = childId(InterfaceID.Skillmulti.ALL);
@@ -656,32 +655,14 @@ public class FishingCookingModule extends AbstractSkillingModule {
             return false;
         }
 
-        if (!ctx.bank().isOpen()) {
-            if (!Navigation.isBankReachable(ctx)) {
-                log("Walking to bank for Al Kharid Cooking travel coins");
-                Navigation.walkToBank(ctx);
-                Time.sleep(1200, 1800);
-                return true;
-            }
-
-            log("Opening bank for Al Kharid Cooking travel coins");
-            Navigation.openBank(ctx);
-            Time.sleep(1200, 1800, () -> ctx.bank().isOpen(), 100);
+        if (ctx.bank().isOpen()) {
+            log("Closing bank before Al Kharid Cooking bypass route");
+            ctx.bank().close();
+            Time.sleep(500, 800, () -> !ctx.bank().isOpen(), 100);
             return true;
         }
 
-        int inventoryCoins = ctx.inventory().getCount(true, "Coins");
-        if (inventoryCoins < AL_KHARID_GATE_COINS && ctx.bank().getCount("Coins") > 0) {
-            int coinsToWithdraw = Math.min(AL_KHARID_GATE_COINS - inventoryCoins, ctx.bank().getCount("Coins"));
-            log("Withdrawing " + coinsToWithdraw + " coins for Al Kharid Cooking route");
-            ctx.bank().withdraw(coinsToWithdraw, "Coins");
-            Time.sleep(600, 900);
-            return true;
-        }
-
-        log("Walking to Al Kharid bank for Cooking");
-        ctx.bank().close();
-        Time.sleep(500, 800);
+        log("Walking around Al Kharid gate to bank for Cooking");
         Navigation.walkTo(ctx, AL_KHARID_BANK.getRandomTile());
         Time.sleep(1200, 1800);
         return true;

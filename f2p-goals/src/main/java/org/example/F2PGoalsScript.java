@@ -12,7 +12,6 @@ import org.example.core.ModuleTask;
 import org.example.core.ScriptStats;
 import org.example.core.SkillCapManager;
 import org.example.core.runtime.AntibanController;
-import org.example.core.runtime.AlKharidGateDialogueController;
 import org.example.core.runtime.BreakController;
 import org.example.core.runtime.CameraZoomController;
 import org.example.core.runtime.DeathRecoveryController;
@@ -39,7 +38,7 @@ import java.util.List;
 
 @ScriptManifest(name = "F2P Goals", gameType = GameType.OS)
 public class F2PGoalsScript extends Script {
-    private static final String SCRIPT_VERSION = "v0.4.236-disable-cooks-cleanup-loop";
+    private static final String SCRIPT_VERSION = "v0.4.237-alkharid-gate-bypass";
     private static final boolean QUEST_TEST_ONLY = false;
     private static final boolean RANGED_TEST_ONLY = false;
     private static final boolean MAGIC_TEST_ONLY = false;
@@ -168,13 +167,11 @@ public class F2PGoalsScript extends Script {
         List<RuntimeController> runtimeModules = lightweightTestMode
                 ? List.of(
                         new DeathRecoveryController(this::logInfo, stats),
-                        new AlKharidGateDialogueController(this::logInfo, stats),
                         new LoopWatchdogController(this::logInfo, stats, SCRIPT_VERSION, goalManagerModule::requestReroll),
                         new CameraZoomController(this::logInfo)
                 )
                 : List.of(
                         new DeathRecoveryController(this::logInfo, stats),
-                        new AlKharidGateDialogueController(this::logInfo, stats),
                         new LoopWatchdogController(this::logInfo, stats, SCRIPT_VERSION, goalManagerModule::requestReroll),
                         new CameraZoomController(this::logInfo),
                         BreakController.normal(this::logInfo, stats),

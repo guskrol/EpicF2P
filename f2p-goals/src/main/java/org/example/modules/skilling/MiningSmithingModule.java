@@ -26,23 +26,20 @@ public class MiningSmithingModule extends AbstractSkillingModule {
     private static final Tile LUMBRIDGE_SWAMP_MINE_CENTER = new Tile(3226, 3146, 0);
     private static final Area AL_KHARID_REGION = new Area(3250, 3130, 3310, 3205);
     private static final int FURNACE_ID = 24009;
-    private static final int AL_KHARID_GATE_COINS = 10;
     private static final FurnaceTarget[] FURNACE_TARGETS = {
             new FurnaceTarget(
                     "Lumbridge furnace",
                     new Area(3223, 3250, 3233, 3261),
                     new Area(3218, 3246, 3237, 3264),
                     new Tile(3227, 3257, 0),
-                    new Tile(3227, 3257, 0),
-                    false
+                    new Tile(3227, 3257, 0)
             ),
             new FurnaceTarget(
                     "Al Kharid furnace",
                     new Area(3269, 3182, 3277, 3190),
                     new Area(3267, 3178, 3282, 3194),
                     new Tile(3273, 3186, 0),
-                    new Tile(3276, 3186, 0),
-                    true
+                    new Tile(3276, 3186, 0)
             )
     };
     private static final int MIN_ORE_PAIRS_BEFORE_SMELTING = 100;
@@ -702,17 +699,6 @@ public class MiningSmithingModule extends AbstractSkillingModule {
         }
 
         FurnaceTarget target = ensureSmeltingFurnaceTarget();
-        int inventoryCoins = ctx.inventory().getCount(true, "Coins");
-        if (target.needsGateCoins
-                && !isInAlKharid(ctx)
-                && inventoryCoins < AL_KHARID_GATE_COINS
-                && ctx.bank().getCount("Coins") > 0) {
-            int coinsToWithdraw = Math.min(AL_KHARID_GATE_COINS - inventoryCoins, ctx.bank().getCount("Coins"));
-            log("Withdrawing " + coinsToWithdraw + " coins for " + target.label + " route");
-            ctx.bank().withdraw(coinsToWithdraw, "Coins");
-            Time.sleep(400, 700);
-        }
-
         int maxPairsByInventory = Math.max(1, ctx.inventory().getEmptySlotCount() / 2);
         int amount = Math.min(BRONZE_BATCH_ORE_AMOUNT, Math.min(pairs, maxPairsByInventory));
         log("Withdrawing " + amount + " copper/tin pairs for bronze bars");
@@ -1411,15 +1397,13 @@ public class MiningSmithingModule extends AbstractSkillingModule {
         private final Area searchArea;
         private final Tile tile;
         private final Tile standTile;
-        private final boolean needsGateCoins;
 
-        private FurnaceTarget(String label, Area area, Area searchArea, Tile tile, Tile standTile, boolean needsGateCoins) {
+        private FurnaceTarget(String label, Area area, Area searchArea, Tile tile, Tile standTile) {
             this.label = label;
             this.area = area;
             this.searchArea = searchArea;
             this.tile = tile;
             this.standTile = standTile;
-            this.needsGateCoins = needsGateCoins;
         }
     }
 }
