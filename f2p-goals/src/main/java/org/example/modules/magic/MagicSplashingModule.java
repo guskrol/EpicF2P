@@ -30,7 +30,7 @@ import java.util.function.Consumer;
 
 public class MagicSplashingModule implements ManagedF2PModule {
     public static final int NORMAL_MAGIC_CAP = 13;
-    public static final int FUTURE_SPLASH_CAP = 25;
+    public static final int FUTURE_SPLASH_CAP = 20;
     private static final int MIN_DEFENCE_LEVEL = 15;
     private static final int MIN_CATCH_UP_TARGET_LEVEL = 13;
     private static final int CATCH_UP_PRIORITY_BOOST = 85;

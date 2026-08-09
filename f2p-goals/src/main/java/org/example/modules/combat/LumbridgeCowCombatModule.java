@@ -72,7 +72,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private static final int MIN_DEFENCE_FOR_RANGED = 15;
     private static final int MIN_RANGED_ARROWS_EQUIPPED = 50;
     private static final int MIN_RANGED_ARROW_PURCHASE = 200;
-    public static final int RANGED_TRAINING_CAP = 30;
+    public static final int RANGED_TRAINING_CAP = 20;
     private static final String WC_FUNDING_LOG_NAME = "Logs";
     private static final String STARTER_FOOD_NAME = "Trout";
     private static final int MIN_FOOD_STOCK_TARGET = 120;
@@ -969,7 +969,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
 
         for (String itemName : NON_SELLABLE_FUNDING_ITEMS) {
-            if (!isCombatFoodName(itemName) && ctx.inventory().contains(itemName)) {
+            if (!isCombatFoodName(itemName)
+                    && !isKnownCombatGearName(itemName)
+                    && ctx.inventory().contains(itemName)) {
                 log("Depositing restricted loot before combat food: " + itemName);
                 ctx.bank().depositAll(itemName);
                 deposited = true;
@@ -1257,11 +1259,6 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return false;
         }
 
-        if (hasNonSellableFundingItemInInventory(ctx)) {
-            bankFundingLoot(ctx);
-            return true;
-        }
-
         if (pendingGearPurchaseOptional
                 && isAmulet(pendingGearPurchase)
                 && hasBetterOrEqualAmulet(ctx, pendingGearPurchase)) {
@@ -1288,6 +1285,11 @@ public class LumbridgeCowCombatModule implements F2PModule {
             clearPendingGearPurchase();
             initialGearChecked = false;
             return false;
+        }
+
+        if (hasNonSellableFundingItemInInventory(ctx)) {
+            bankFundingLoot(ctx);
+            return true;
         }
 
         if (ctx.bank().isOpen() && isPendingGearPurchaseSatisfied(ctx)) {
@@ -1428,6 +1430,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
             }
             for (String itemName : NON_SELLABLE_FUNDING_ITEMS) {
                 if (isCombatFoodName(itemName)) {
+                    continue;
+                }
+                if (isKnownCombatGearName(itemName)) {
                     continue;
                 }
                 ctx.bank().depositAll(itemName);
@@ -3039,6 +3044,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
         for (ItemWidget item : ctx.inventory().getItems()) {
             if (item != null
                     && !isCombatFoodName(item.getName())
+                    && !isKnownCombatGearName(item.getName())
                     && matchesAny(item.getName(), NON_SELLABLE_FUNDING_ITEMS)) {
                 return true;
             }
@@ -3048,6 +3054,34 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
     private boolean isCombatFoodName(String itemName) {
         return F2PItemRegistry.isFood(itemName);
+    }
+
+    private boolean isKnownCombatGearName(String itemName) {
+        return matchesGearName(itemName, WEAPONS)
+                || matchesGearName(itemName, HELMETS)
+                || matchesGearName(itemName, BODIES)
+                || matchesGearName(itemName, LEGS)
+                || matchesGearName(itemName, SHIELDS)
+                || matchesGearName(itemName, AMULETS)
+                || matchesGearName(itemName, BOOTS)
+                || matchesGearName(itemName, GLOVES)
+                || matchesGearName(itemName, RANGED_WEAPONS)
+                || matchesGearName(itemName, RANGED_AMMO)
+                || matchesGearName(itemName, RANGED_BODIES)
+                || matchesGearName(itemName, RANGED_LEGS)
+                || matchesGearName(itemName, RANGED_HELMETS)
+                || matchesGearName(itemName, RANGED_GLOVES)
+                || matchesGearName(itemName, RANGED_BOOTS)
+                || matchesGearName(itemName, RANGED_AMULETS);
+    }
+
+    private boolean matchesGearName(String itemName, GearItem[] gearItems) {
+        for (GearItem gearItem : gearItems) {
+            if (namesMatch(itemName, gearItem.name)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean hasNonWoodcuttingFundingItemInInventory(APIContext ctx) {

@@ -10,8 +10,8 @@ import java.util.concurrent.ThreadLocalRandom;
 public class SkillCapManager {
     private static final int MIN_CAP = 29;
     private static final int MAX_CAP = 35;
-    private static final int RANGED_CAP = 30;
-    private static final int MAGIC_CAP = 25;
+    private static final int RANGED_CAP = 20;
+    private static final int MAGIC_CAP = 20;
     private static final int MIN_CRAFTING_CAP = 25;
     private static final int MAX_CRAFTING_CAP = 30;
 
