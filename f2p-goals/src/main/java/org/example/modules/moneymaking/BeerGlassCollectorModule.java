@@ -25,6 +25,7 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
     private static final int[] BEER_GLASS_SHELVES_IDS = {21794, 21799, 21789, 21791};
     private static final Tile BEER_GLASS_STAND_TILE = new Tile(3324, 3137, 0);
     private static final Tile SORCERESS_DOOR_TILE = new Tile(3321, 3142, 0);
+    private static final Area SORCERESS_DOOR_SEARCH_AREA = new Area(3316, 3130, 3332, 3146);
     private static final int SORCERESS_MIN_X = 3318;
     private static final int SORCERESS_MIN_Y = 3133;
     private static final int SORCERESS_MAX_X = 3329;
@@ -42,6 +43,7 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
     private static final long SHELVES_VIEW_RECOVERY_COOLDOWN_MAX_MILLIS = 18_000L;
     private static final int SHELVES_SEARCH_DISTANCE = 8;
     private static final int MAX_EXACT_TILE_APPROACH_ATTEMPTS = 6;
+    private static final int DOOR_INTERACT_DISTANCE = 4;
 
     private final Consumer<String> logger;
     private final ScriptStats stats;
@@ -125,6 +127,11 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
         if (shelves != null && shelves.isValid() && canSearchShelvesFromHere(ctx, shelves)) {
             consecutiveExactTileApproaches = 0;
             handleBeerGlassShelves(ctx, shelves);
+            return;
+        }
+
+        if (handleSorceressDoor(ctx)) {
+            consecutiveExactTileApproaches = 0;
             return;
         }
 
@@ -315,11 +322,7 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
     private void walkToBeerGlassStandTile(APIContext ctx) {
         clearInteractionState(ctx);
 
-        SceneObject blocker = ctx.walking().getBlockingObjectBetween(
-                ctx.localPlayer().getLocation(),
-                BEER_GLASS_STAND_TILE
-        );
-        if (tryOpenSorceressDoor(ctx, blocker, "blocking door")) {
+        if (handleSorceressDoor(ctx)) {
             return;
         }
 
@@ -353,6 +356,27 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
 
         log("Beer glass exact tile not reached; waiting for scene/path update");
         Time.sleep(900, 1400);
+    }
+
+    private boolean handleSorceressDoor(APIContext ctx) {
+        SceneObject blocker = ctx.walking().getBlockingObjectBetween(
+                ctx.localPlayer().getLocation(),
+                BEER_GLASS_STAND_TILE
+        );
+        if (tryOpenSorceressDoor(ctx, blocker, "blocking door")) {
+            return true;
+        }
+
+        SceneObject closedDoor = findSorceressClosedDoor(ctx);
+        if (closedDoor == null || !closedDoor.isValid()) {
+            return false;
+        }
+
+        if (closedDoor.tileDistanceTo(ctx) > DOOR_INTERACT_DISTANCE) {
+            return false;
+        }
+
+        return tryOpenSorceressDoor(ctx, closedDoor, "Sorceress house door");
     }
 
     private boolean recoverFromUpstairs(APIContext ctx) {
@@ -431,8 +455,28 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
         SceneObject door = ctx.objects()
                 .query()
                 .id(SORCERESS_DOOR_CLOSED_ID)
+                .tileDistance(10)
+                .results()
+                .nearest();
+        if (door != null && door.isValid()) {
+            return door;
+        }
+
+        door = ctx.objects()
+                .query()
+                .id(SORCERESS_DOOR_CLOSED_ID)
+                .within(SORCERESS_DOOR_SEARCH_AREA)
+                .results()
+                .nearest();
+        if (door != null && door.isValid()) {
+            return door;
+        }
+
+        door = ctx.objects()
+                .query()
+                .named("Door")
                 .actions("Open")
-                .within(SORCERESS_SHELVES_AREA)
+                .tileDistance(10)
                 .results()
                 .nearest();
         if (door != null && door.isValid()) {
@@ -443,7 +487,7 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
                 .query()
                 .named("Door")
                 .actions("Open")
-                .within(SORCERESS_SHELVES_AREA)
+                .within(SORCERESS_DOOR_SEARCH_AREA)
                 .results()
                 .nearest();
     }
@@ -452,7 +496,8 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
         if (object == null || !object.isValid()) {
             return false;
         }
-        if (object.getId() != SORCERESS_DOOR_CLOSED_ID
+        boolean knownClosedDoor = object.getId() == SORCERESS_DOOR_CLOSED_ID;
+        if (!knownClosedDoor
                 && object.getId() != SORCERESS_DOOR_OPEN_ID
                 && !object.hasAction("Open", "Enter", "Walk-through")) {
             return false;
@@ -463,10 +508,12 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
 
         log("Opening " + label + " before Beer glass shelves: id=" + object.getId());
         boolean interacted = object.interact("Open")
+                || ctx.menu().interact("Open", object, false)
+                || ctx.menu().interact("Open", object, true)
                 || object.interact("Enter")
                 || object.interact("Walk-through")
-                || ctx.menu().interact("Open", object, false)
-                || ctx.menu().interact("Enter", object, false);
+                || ctx.menu().interact("Enter", object, false)
+                || ctx.menu().interact("Walk-through", object, false);
         if (interacted) {
             Time.sleep(900, 1600, () -> findSorceressClosedDoor(ctx) == null, 100);
         }

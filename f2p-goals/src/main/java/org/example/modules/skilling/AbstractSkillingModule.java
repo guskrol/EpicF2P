@@ -3,6 +3,8 @@ package org.example.modules.skilling;
 import com.epicbot.api.shared.APIContext;
 import com.epicbot.api.shared.entity.ItemWidget;
 import com.epicbot.api.shared.entity.WidgetChild;
+import com.epicbot.api.shared.methods.IBankAPI;
+import com.epicbot.api.shared.methods.IGrandExchangeAPI;
 import com.epicbot.api.shared.model.Area;
 import com.epicbot.api.shared.model.Skill;
 import com.epicbot.api.shared.util.time.Time;
@@ -48,7 +50,18 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
 
     protected boolean hasAnyTool(APIContext ctx, String... toolNames) {
         for (String toolName : toolNames) {
-            if (ctx.inventory().contains(toolName) || ctx.equipment().contains(toolName)) {
+            if (inventoryHasUsableItem(ctx, toolName) || ctx.equipment().contains(toolName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean inventoryHasUsableItem(APIContext ctx, String itemName) {
+        for (ItemWidget item : ctx.inventory().getItems()) {
+            if (item != null
+                    && namesMatch(item.getName(), itemName)
+                    && !item.isNoted()) {
                 return true;
             }
         }
@@ -148,7 +161,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
             return false;
         }
 
-        if (ctx.inventory().contains(desiredTool) || ctx.equipment().contains(desiredTool)) {
+        if (inventoryHasUsableItem(ctx, desiredTool) || ctx.equipment().contains(desiredTool)) {
             clearPendingToolPurchase();
             return false;
         }
@@ -221,13 +234,17 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
             return false;
         }
 
-        if (ctx.inventory().contains(pendingToolPurchase) || ctx.equipment().contains(pendingToolPurchase)) {
+        if (inventoryHasUsableItem(ctx, pendingToolPurchase) || ctx.equipment().contains(pendingToolPurchase)) {
             log("Tool upgrade obtained: " + pendingToolPurchase);
             if (ctx.grandExchange().isOpen()) {
                 ctx.grandExchange().close();
                 Time.sleep(600, 900);
             }
             clearPendingToolPurchase();
+            return true;
+        }
+
+        if (pendingToolOfferCheckAt == 0L && checkBankForPendingTool(ctx, toolLabel)) {
             return true;
         }
 
@@ -256,7 +273,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
         }
 
         collectToolOffers(ctx);
-        if (ctx.inventory().contains(pendingToolPurchase)) {
+        if (inventoryHasUsableItem(ctx, pendingToolPurchase)) {
             log("Collected " + toolLabel + " upgrade: " + pendingToolPurchase);
             ctx.grandExchange().close();
             clearPendingToolPurchase();
@@ -273,7 +290,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
 
         pendingToolBuyPrice = Math.max(pendingToolBuyPrice, toolBuyPrice(ctx, pendingToolPurchase));
         log("Buying " + toolLabel + " upgrade: 1x " + pendingToolPurchase + " for " + pendingToolBuyPrice);
-        boolean placed = ctx.grandExchange().placeBuyOffer(pendingToolPurchase, 1, pendingToolBuyPrice);
+        boolean placed = placeToolBuyOffer(ctx, pendingToolPurchase, 1, pendingToolBuyPrice);
         if (!placed) {
             if (confirmToolHighPriceGeOffer(ctx)) {
                 return true;
@@ -287,13 +304,94 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
         pendingToolOfferCheckAt = now + 8_000L;
         Time.sleep(5000, 8000);
         collectToolOffers(ctx);
-        if (ctx.inventory().contains(pendingToolPurchase)) {
+        if (inventoryHasUsableItem(ctx, pendingToolPurchase)) {
             log("Collected " + toolLabel + " upgrade: " + pendingToolPurchase);
             ctx.grandExchange().close();
             clearPendingToolPurchase();
         }
         Time.sleep(600, 900);
         return true;
+    }
+
+    private boolean checkBankForPendingTool(APIContext ctx, String toolLabel) {
+        if (ctx.grandExchange().isOpen()) {
+            log("Closing GE to recheck bank for " + pendingToolPurchase);
+            ctx.grandExchange().close();
+            Time.sleep(600, 900, () -> !ctx.grandExchange().isOpen(), 100);
+            return true;
+        }
+
+        if (!isBankOpen(ctx)) {
+            if (!Navigation.isBankReachable(ctx)) {
+                return false;
+            }
+
+            log("Opening bank to recheck " + toolLabel + ": " + pendingToolPurchase);
+            Navigation.openBank(ctx);
+            Time.sleep(1200, 1800, () -> isBankOpen(ctx), 100);
+            return true;
+        }
+
+        if (!bankHasItem(ctx, pendingToolPurchase)) {
+            return false;
+        }
+
+        log("Found pending " + toolLabel + " in bank; withdrawing instead of buying: " + pendingToolPurchase);
+        if (withdrawOne(ctx, pendingToolPurchase)) {
+            Time.sleep(600, 900);
+            clearPendingToolPurchase();
+            return true;
+        }
+        return true;
+    }
+
+    private boolean placeToolBuyOffer(APIContext ctx, String itemName, int quantity, int price) {
+        if (ctx.grandExchange().placeBuyOffer(itemName, quantity, price)) {
+            return true;
+        }
+
+        if (clickVisibleWidgetByText(ctx, itemName)) {
+            Time.sleep(500, 900);
+        }
+
+        if (isBuyOfferSetupScreen(ctx)) {
+            return completeToolBuyOffer(ctx, quantity, price);
+        }
+
+        ctx.grandExchange().backToOverview();
+        Time.sleep(300, 600);
+        if (ctx.grandExchange().newBuyOffer(itemName)) {
+            Time.sleep(700, 1200);
+            if (clickVisibleWidgetByText(ctx, itemName)) {
+                Time.sleep(500, 900);
+            }
+            return completeToolBuyOffer(ctx, quantity, price);
+        }
+
+        if (clickVisibleWidgetByText(ctx, itemName)) {
+            Time.sleep(500, 900);
+            return completeToolBuyOffer(ctx, quantity, price);
+        }
+
+        return false;
+    }
+
+    private boolean completeToolBuyOffer(APIContext ctx, int quantity, int price) {
+        if (!isBuyOfferSetupScreen(ctx)) {
+            return false;
+        }
+
+        ctx.grandExchange().setQuantity(quantity);
+        Time.sleep(250, 450);
+        ctx.grandExchange().setPrice(price);
+        Time.sleep(250, 450);
+        return ctx.grandExchange().confirmOffer();
+    }
+
+    private boolean isBuyOfferSetupScreen(APIContext ctx) {
+        IGrandExchangeAPI.GrandExchangeScreen screen = ctx.grandExchange().getCurrentScreen();
+        return screen == IGrandExchangeAPI.GrandExchangeScreen.SETUP_BUY_OFFER
+                || screen == IGrandExchangeAPI.GrandExchangeScreen.ACTIVE_BUY_OFFER;
     }
 
     private boolean confirmToolHighPriceGeOffer(APIContext ctx) {
@@ -389,6 +487,18 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
 
         Point point = widget.getCentralPoint();
         return point != null && ctx.mouse().click(point, false);
+    }
+
+    private boolean clickVisibleWidgetByText(APIContext ctx, String text) {
+        WidgetChild widget = findVisibleWidgetByText(ctx, text);
+        if (!isVisibleWidget(widget)) {
+            return false;
+        }
+
+        return clickWidgetCenter(ctx, widget)
+                || ctx.mouse().click(widget, false)
+                || widget.click(false)
+                || widget.click();
     }
 
     private boolean isVisibleWidget(WidgetChild widget) {
@@ -621,11 +731,23 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
     }
 
     protected boolean withdrawOne(APIContext ctx, String name) {
+        ensureItemWithdrawMode(ctx);
         return ctx.bank().withdraw(1, name)
                 || ctx.bank().withdrawAny(1, name)
                 || ctx.bank().interactItem("Withdraw-1", name)
                 || ctx.bank().interactItem("Withdraw 1", name)
                 || ctx.bank().interactItem("Withdraw", name);
+    }
+
+    private boolean ensureItemWithdrawMode(APIContext ctx) {
+        if (!isBankOpen(ctx) || ctx.bank().isWithdrawMode(IBankAPI.WithdrawMode.ITEM)) {
+            return false;
+        }
+
+        log("Switching bank withdraw mode to Item for tool withdrawal");
+        ctx.bank().selectWithdrawMode(IBankAPI.WithdrawMode.ITEM);
+        Time.sleep(500, 800, () -> ctx.bank().isWithdrawMode(IBankAPI.WithdrawMode.ITEM), 100);
+        return true;
     }
 
     protected boolean namesMatch(String left, String right) {
