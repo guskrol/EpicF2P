@@ -1341,6 +1341,10 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
 
         if (!ctx.bank().isOpen()) {
+            if (closeGrandExchangeBeforeGearBanking(ctx)) {
+                return true;
+            }
+
             if (!Navigation.isBankReachable(ctx)) {
                 log("Walking to bank to fund gear upgrade: " + pendingGearPurchase.name);
                 walkToBank(ctx);
@@ -1393,6 +1397,26 @@ public class LumbridgeCowCombatModule implements F2PModule {
         startWoodcuttingFunding(ctx, buyPrice, "no sellable funding loot found");
         ctx.bank().close();
         Time.sleep(600, 900);
+        return true;
+    }
+
+    private boolean closeGrandExchangeBeforeGearBanking(APIContext ctx) {
+        if (!ctx.grandExchange().isOpen()) {
+            return false;
+        }
+
+        collectGeOffers(ctx);
+        if (isPendingGearPurchaseSatisfied(ctx)) {
+            log("Gear upgrade obtained after GE collection: " + pendingGearPurchase.name);
+            closeGrandExchangeAfterTrade(ctx, "gear upgrade collection");
+            clearPendingGearPurchase();
+            initialGearChecked = false;
+            return true;
+        }
+
+        log("Closing GE before bank check for gear upgrade: " + pendingGearPurchase.name);
+        ctx.grandExchange().close();
+        Time.sleep(600, 900, () -> !ctx.grandExchange().isOpen(), 100);
         return true;
     }
 
