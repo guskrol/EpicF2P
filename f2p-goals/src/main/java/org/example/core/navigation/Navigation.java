@@ -7,6 +7,7 @@ import com.epicbot.api.shared.model.Tile;
 import com.epicbot.api.shared.model.path.TilePath;
 import com.epicbot.api.shared.webwalking.model.WalkState;
 
+import java.util.Arrays;
 import java.util.concurrent.ThreadLocalRandom;
 
 public final class Navigation {
@@ -18,9 +19,9 @@ public final class Navigation {
     private static final Area AL_KHARID_F2P_BANK_AREA = new Area(3268, 3161, 3274, 3173);
     private static final double AL_KHARID_BYPASS_PATH_PRECISION = 2.0;
     private static final Tile[] AL_KHARID_GATE_WEST_TO_EAST_PATH = {
-            new Tile(3256, 3268, 0),
-            new Tile(3257, 3274, 0),
-            new Tile(3259, 3280, 0),
+            new Tile(3256, 3264, 0),
+            new Tile(3256, 3270, 0),
+            new Tile(3258, 3278, 0),
             new Tile(3262, 3284, 0),
             new Tile(3268, 3284, 0),
             new Tile(3274, 3281, 0),
@@ -29,9 +30,27 @@ public final class Navigation {
             new Tile(3282, 3263, 0),
             new Tile(3282, 3256, 0),
             new Tile(3282, 3248, 0),
-            new Tile(3282, 3238, 0)
+            new Tile(3282, 3238, 0),
+            new Tile(3282, 3230, 0),
+            new Tile(3282, 3222, 0),
+            new Tile(3281, 3214, 0),
+            new Tile(3280, 3206, 0),
+            new Tile(3278, 3198, 0),
+            new Tile(3276, 3190, 0),
+            new Tile(3274, 3182, 0),
+            new Tile(3272, 3174, 0),
+            new Tile(3271, 3167, 0)
     };
     private static final Tile[] AL_KHARID_GATE_EAST_TO_WEST_PATH = {
+            new Tile(3271, 3167, 0),
+            new Tile(3272, 3174, 0),
+            new Tile(3274, 3182, 0),
+            new Tile(3276, 3190, 0),
+            new Tile(3278, 3198, 0),
+            new Tile(3280, 3206, 0),
+            new Tile(3281, 3214, 0),
+            new Tile(3282, 3222, 0),
+            new Tile(3282, 3230, 0),
             new Tile(3282, 3238, 0),
             new Tile(3282, 3248, 0),
             new Tile(3282, 3256, 0),
@@ -41,9 +60,9 @@ public final class Navigation {
             new Tile(3274, 3281, 0),
             new Tile(3268, 3284, 0),
             new Tile(3262, 3284, 0),
-            new Tile(3259, 3280, 0),
-            new Tile(3257, 3274, 0),
-            new Tile(3256, 3268, 0)
+            new Tile(3258, 3278, 0),
+            new Tile(3256, 3270, 0),
+            new Tile(3256, 3264, 0)
     };
     private static final Tile[] AL_KHARID_F2P_BANK_TILES = {
             new Tile(3270, 3167, 0),
@@ -131,7 +150,12 @@ public final class Navigation {
     }
 
     private static WalkState walkBypassPath(APIContext ctx, Tile[] path) {
-        TilePath tilePath = new TilePath(AL_KHARID_BYPASS_PATH_PRECISION, path);
+        Tile[] remainingPath = remainingPathFromCurrentLocation(ctx, path);
+        if (remainingPath.length == 0) {
+            return WalkState.SUCCESS;
+        }
+
+        TilePath tilePath = new TilePath(AL_KHARID_BYPASS_PATH_PRECISION, remainingPath);
         if (ctx.walking().walkPath(tilePath)) {
             return WalkState.SUCCESS;
         }
@@ -142,6 +166,41 @@ public final class Navigation {
         }
 
         return WalkState.FAILED;
+    }
+
+    private static Tile[] remainingPathFromCurrentLocation(APIContext ctx, Tile[] path) {
+        Tile location = ctx.localPlayer().getLocation();
+        if (location == null || path == null || path.length == 0) {
+            return new Tile[0];
+        }
+
+        int closestIndex = 0;
+        int closestDistance = Integer.MAX_VALUE;
+        for (int i = 0; i < path.length; i++) {
+            Tile tile = path[i];
+            if (tile == null || tile.getPlane() != location.getPlane()) {
+                continue;
+            }
+
+            int distance = squaredDistance(location, tile);
+            if (distance < closestDistance) {
+                closestIndex = i;
+                closestDistance = distance;
+            }
+        }
+
+        int startIndex = closestIndex;
+        if (Math.sqrt(closestDistance) <= AL_KHARID_BYPASS_PATH_PRECISION && closestIndex < path.length - 1) {
+            startIndex = closestIndex + 1;
+        }
+
+        return Arrays.copyOfRange(path, startIndex, path.length);
+    }
+
+    private static int squaredDistance(Tile a, Tile b) {
+        int dx = a.getX() - b.getX();
+        int dy = a.getY() - b.getY();
+        return dx * dx + dy * dy;
     }
 
     private static boolean isLumbridgeSideOfGate(Tile tile) {
