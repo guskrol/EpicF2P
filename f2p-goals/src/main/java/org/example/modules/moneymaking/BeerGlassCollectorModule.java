@@ -129,8 +129,13 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
         }
 
         if (!isAtBeerGlassStandTile(ctx)) {
+            boolean nearShelvesBeforeWalk = isNearBeerGlassShelvesArea(ctx);
             walkToBeerGlassStandTile(ctx);
-            consecutiveExactTileApproaches++;
+            if (nearShelvesBeforeWalk || isNearBeerGlassShelvesArea(ctx)) {
+                consecutiveExactTileApproaches++;
+            } else {
+                consecutiveExactTileApproaches = 0;
+            }
             if (consecutiveExactTileApproaches >= MAX_EXACT_TILE_APPROACH_ATTEMPTS) {
                 log("Beer glass exact tile approach loop; trying shelves search recovery");
                 debugNearbySearchObjects(ctx);
@@ -295,6 +300,16 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
                 && location.getX() == BEER_GLASS_STAND_TILE.getX()
                 && location.getY() == BEER_GLASS_STAND_TILE.getY()
                 && location.getPlane() == BEER_GLASS_STAND_TILE.getPlane();
+    }
+
+    private boolean isNearBeerGlassShelvesArea(APIContext ctx) {
+        Tile location = ctx.localPlayer().getLocation();
+        return location != null
+                && location.getPlane() == BEER_GLASS_STAND_TILE.getPlane()
+                && location.getX() >= SORCERESS_MIN_X - 8
+                && location.getX() <= SORCERESS_MAX_X + 8
+                && location.getY() >= SORCERESS_MIN_Y - 8
+                && location.getY() <= SORCERESS_MAX_Y + 8;
     }
 
     private void walkToBeerGlassStandTile(APIContext ctx) {

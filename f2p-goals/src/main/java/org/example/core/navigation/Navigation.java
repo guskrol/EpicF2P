@@ -18,6 +18,7 @@ public final class Navigation {
     private static final Area DESERT_P2P_BANK_AVOID_AREA = new Area(3295, 3105, 3336, 3150);
     private static final Area AL_KHARID_F2P_BANK_AREA = new Area(3268, 3161, 3274, 3173);
     private static final double AL_KHARID_BYPASS_PATH_PRECISION = 2.0;
+    private static final int AL_KHARID_BYPASS_LOCAL_RANGE = 18;
     private static final Tile[] AL_KHARID_GATE_WEST_TO_EAST_PATH = {
             new Tile(3256, 3264, 0),
             new Tile(3256, 3270, 0),
@@ -139,22 +140,36 @@ public final class Navigation {
         }
 
         if (isLumbridgeSideOfGate(location) && isAlKharidOrDesertSide(destinationTile)) {
-            return walkBypassPath(ctx, AL_KHARID_GATE_WEST_TO_EAST_PATH);
+            return walkBypassRoute(ctx, AL_KHARID_GATE_WEST_TO_EAST_PATH);
         }
 
         if (isAlKharidOrDesertSide(location) && isLumbridgeSideOfGate(destinationTile)) {
-            return walkBypassPath(ctx, AL_KHARID_GATE_EAST_TO_WEST_PATH);
+            return walkBypassRoute(ctx, AL_KHARID_GATE_EAST_TO_WEST_PATH);
         }
 
         return null;
     }
 
-    private static WalkState walkBypassPath(APIContext ctx, Tile[] path) {
+    private static WalkState walkBypassRoute(APIContext ctx, Tile[] path) {
+        Tile location = ctx.localPlayer().getLocation();
         Tile[] remainingPath = remainingPathFromCurrentLocation(ctx, path);
         if (remainingPath.length == 0) {
             return WalkState.SUCCESS;
         }
 
+        Tile nextPathTile = remainingPath[0];
+        if (location == null || squaredDistance(location, nextPathTile) > square(AL_KHARID_BYPASS_LOCAL_RANGE)) {
+            return ctx.webWalking().walkTo(nextPathTile);
+        }
+
+        WalkState localState = walkBypassPath(ctx, remainingPath);
+        if (localState == WalkState.FAILED && squaredDistance(location, nextPathTile) > square(4)) {
+            return ctx.webWalking().walkTo(nextPathTile);
+        }
+        return localState;
+    }
+
+    private static WalkState walkBypassPath(APIContext ctx, Tile[] remainingPath) {
         TilePath tilePath = new TilePath(AL_KHARID_BYPASS_PATH_PRECISION, remainingPath);
         if (ctx.walking().walkPath(tilePath)) {
             return WalkState.SUCCESS;
@@ -201,6 +216,10 @@ public final class Navigation {
         int dx = a.getX() - b.getX();
         int dy = a.getY() - b.getY();
         return dx * dx + dy * dy;
+    }
+
+    private static int square(int value) {
+        return value * value;
     }
 
     private static boolean isLumbridgeSideOfGate(Tile tile) {
