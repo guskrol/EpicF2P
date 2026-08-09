@@ -20,6 +20,7 @@ public final class Navigation {
     private static final Tile AL_KHARID_GATE_NORTH_GAP_EAST_TILE = new Tile(3277, 3278, 0);
     private static final Tile AL_KHARID_GATE_NORTH_EAST_MID_TILE = new Tile(3282, 3260, 0);
     private static final Tile AL_KHARID_GATE_NORTH_EAST_START_TILE = new Tile(3282, 3238, 0);
+    private static final int AL_KHARID_BYPASS_REACHED_DISTANCE = 5;
     private static final Tile[] AL_KHARID_F2P_BANK_TILES = {
             new Tile(3270, 3167, 0),
             new Tile(3271, 3167, 0),
@@ -108,6 +109,22 @@ public final class Navigation {
     }
 
     private static Tile nextWestToEastBypassWaypoint(Tile location) {
+        if (near(location, AL_KHARID_GATE_NORTH_WEST_TILE)) {
+            return AL_KHARID_GATE_NORTH_GAP_WEST_TILE;
+        }
+        if (near(location, AL_KHARID_GATE_NORTH_GAP_WEST_TILE)) {
+            return AL_KHARID_GATE_NORTH_GAP_EAST_TILE;
+        }
+        if (near(location, AL_KHARID_GATE_NORTH_GAP_EAST_TILE)) {
+            return AL_KHARID_GATE_NORTH_EAST_MID_TILE;
+        }
+        if (near(location, AL_KHARID_GATE_NORTH_EAST_MID_TILE)) {
+            return AL_KHARID_GATE_NORTH_EAST_START_TILE;
+        }
+        if (near(location, AL_KHARID_GATE_NORTH_EAST_START_TILE)) {
+            return null;
+        }
+
         if (location.getY() < 3264 || location.getX() < 3248) {
             return AL_KHARID_GATE_NORTH_WEST_TILE;
         }
@@ -124,6 +141,22 @@ public final class Navigation {
     }
 
     private static Tile nextEastToWestBypassWaypoint(Tile location) {
+        if (near(location, AL_KHARID_GATE_NORTH_EAST_START_TILE)) {
+            return AL_KHARID_GATE_NORTH_EAST_MID_TILE;
+        }
+        if (near(location, AL_KHARID_GATE_NORTH_EAST_MID_TILE)) {
+            return AL_KHARID_GATE_NORTH_GAP_EAST_TILE;
+        }
+        if (near(location, AL_KHARID_GATE_NORTH_GAP_EAST_TILE)) {
+            return AL_KHARID_GATE_NORTH_GAP_WEST_TILE;
+        }
+        if (near(location, AL_KHARID_GATE_NORTH_GAP_WEST_TILE)) {
+            return AL_KHARID_GATE_NORTH_WEST_TILE;
+        }
+        if (near(location, AL_KHARID_GATE_NORTH_WEST_TILE)) {
+            return null;
+        }
+
         if (location.getY() < 3236 || location.getX() > 3286) {
             return AL_KHARID_GATE_NORTH_EAST_START_TILE;
         }
@@ -140,15 +173,23 @@ public final class Navigation {
     }
 
     private static WalkState walkBypassWaypoint(APIContext ctx, Tile waypoint) {
-        if (waypoint.tileDistanceTo(ctx) <= 4) {
-            return WalkState.SUCCESS;
-        }
-
-        if (ctx.walking().walkOnMap(waypoint) || ctx.walking().walkTo(waypoint)) {
+        if (ctx.walking().walkOnScreen(waypoint)
+                || waypoint.interact("Walk here")
+                || waypoint.click(true)
+                || ctx.walking().walkOnMap(waypoint)
+                || ctx.walking().walkTo(waypoint)) {
             return WalkState.SUCCESS;
         }
 
         return ctx.webWalking().walkTo(waypoint);
+    }
+
+    private static boolean near(Tile location, Tile waypoint) {
+        return location != null
+                && waypoint != null
+                && location.getPlane() == waypoint.getPlane()
+                && Math.abs(location.getX() - waypoint.getX()) <= AL_KHARID_BYPASS_REACHED_DISTANCE
+                && Math.abs(location.getY() - waypoint.getY()) <= AL_KHARID_BYPASS_REACHED_DISTANCE;
     }
 
     private static boolean isLumbridgeSideOfGate(Tile tile) {
