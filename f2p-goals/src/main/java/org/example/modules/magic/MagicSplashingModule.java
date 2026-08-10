@@ -820,7 +820,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
         activeFundingDecision = decision;
         log("Magic funding pool selected " + fundingMethodLabel(decision.method())
                 + " for " + targetItem + " (" + activeFundingTargetCoins + " gp target)");
-        stats.setFundingReason("Magic " + fundingMethodLabel(decision.method()) + " for " + targetItem);
+        updateMagicFundingProgress(ctx);
         return true;
     }
 
@@ -833,13 +833,13 @@ public class MagicSplashingModule implements ManagedF2PModule {
         nextPendingFundingSellCheckAt = 0L;
         log("Magic funding pool selected stock sale: " + pendingFundingSellQuantity
                 + "x " + pendingFundingSellItem + " for " + activeFundingTargetItem);
-        stats.setFundingReason("Magic stock sale: " + pendingFundingSellItem
-                + " for " + activeFundingTargetItem);
+        updateMagicFundingProgress(ctx);
         return withdrawFundingStockFromBank(ctx);
     }
 
     private boolean handleMagicFundingPool(APIContext ctx) {
         if (pendingFundingSellItem != null) {
+            updateMagicFundingProgress(ctx);
             return handlePendingFundingSale(ctx);
         }
 
@@ -847,6 +847,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
             return false;
         }
 
+        updateMagicFundingProgress(ctx);
         if (isBankOpen(ctx)) {
             int knownCoins = knownMagicFundingCoins(ctx);
             if (knownCoins >= activeFundingTargetCoins) {
@@ -1060,14 +1061,11 @@ public class MagicSplashingModule implements ManagedF2PModule {
                     + " inv=" + decision.inventoryCount()
                     + " bank=" + decision.bankCount()
                     + " projected~" + decision.projectedValue() + "gp");
-            stats.setFundingReason("Magic stock sale: " + decision.itemName()
-                    + " for " + activeFundingTargetItem);
         } else {
             log("Magic FundingPlanner selected " + fundingMethodLabel(decision.method())
                     + " for " + activeFundingTargetItem);
-            stats.setFundingReason("Magic " + fundingMethodLabel(decision.method())
-                    + " for " + activeFundingTargetItem);
         }
+        updateMagicFundingProgress(ctx);
         return decision;
     }
 
@@ -1095,6 +1093,41 @@ public class MagicSplashingModule implements ManagedF2PModule {
         return coins;
     }
 
+    private void updateMagicFundingProgress(APIContext ctx) {
+        if (activeFundingTargetCoins <= 0) {
+            return;
+        }
+
+        int knownCoins = knownMagicFundingCoins(ctx);
+        stats.setFundingReason(
+                magicFundingDisplayLabel(),
+                knownCoins,
+                activeFundingTargetCoins,
+                projectedMagicFundingGp(ctx, knownCoins)
+        );
+    }
+
+    private String magicFundingDisplayLabel() {
+        String targetItem = activeFundingTargetItem == null || activeFundingTargetItem.isBlank()
+                ? "target"
+                : activeFundingTargetItem;
+        if (pendingFundingSellItem != null) {
+            return "Magic stock sale: " + pendingFundingSellItem + " for " + targetItem;
+        }
+        if (activeFundingDecision != null) {
+            return "Magic " + fundingMethodLabel(activeFundingDecision.method()) + " for " + targetItem;
+        }
+        return "Magic funding for " + targetItem;
+    }
+
+    private long projectedMagicFundingGp(APIContext ctx, int knownCoins) {
+        long projected = Math.max(0, knownCoins);
+        for (FundingPlanner.Asset asset : magicFundingAssets(ctx)) {
+            projected += (long) asset.totalCount() * asset.unitSellPrice();
+        }
+        return projected;
+    }
+
     private String fundingMethodLabel(FundingPlanner.Method method) {
         if (method == FundingPlanner.Method.BEER_GLASS) {
             return "Beer glass";
@@ -1119,6 +1152,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
         activeFundingTargetItem = null;
         activeFundingTargetCoins = 0;
         clearPendingFundingSale();
+        stats.clearFundingReason();
     }
 
     private FundingStock bestFundingStock(APIContext ctx, int missingCoins) {

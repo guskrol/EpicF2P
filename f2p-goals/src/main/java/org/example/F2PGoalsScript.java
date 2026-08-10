@@ -39,7 +39,7 @@ import java.util.List;
 
 @ScriptManifest(name = "F2P Goals", gameType = GameType.OS)
 public class F2PGoalsScript extends Script {
-    private static final String SCRIPT_VERSION = "v0.4.251-magic-rune-loader";
+    private static final String SCRIPT_VERSION = "v0.4.252-funding-gp-target";
     private static final boolean QUEST_TEST_ONLY = false;
     private static final boolean RANGED_TEST_ONLY = false;
     private static final boolean MAGIC_TEST_ONLY = false;
@@ -227,6 +227,7 @@ public class F2PGoalsScript extends Script {
         stats.startExperienceIfNeeded(ctx);
 
         boolean hasFunding = hasValue(stats.lastFundingReason());
+        boolean hasFundingProgress = stats.fundingTargetGp() > 0L;
         boolean hasError = hasValue(stats.lastRecoverableError());
         boolean hasStatus = hasValue(stats.status());
         int x = 8;
@@ -234,6 +235,7 @@ public class F2PGoalsScript extends Script {
         int width = 318;
         int height = 229
                 + (hasFunding ? 15 : 0)
+                + (hasFundingProgress ? 15 : 0)
                 + (hasError ? 15 : 0)
                 + (hasStatus ? 15 : 0);
         Color panel = new Color(12, 15, 20, 188);
@@ -293,6 +295,10 @@ public class F2PGoalsScript extends Script {
         if (hasFunding) {
             line += 15;
             paint.drawText("Funding: " + shortText(stats.lastFundingReason(), 42), x + 12, line, gold, 11);
+        }
+        if (hasFundingProgress) {
+            line += 15;
+            paint.drawText(shortText(fundingProgressText(), 43), x + 12, line, gold, 11);
         }
         if (hasError) {
             line += 15;
@@ -379,6 +385,18 @@ public class F2PGoalsScript extends Script {
 
     private boolean hasValue(String value) {
         return value != null && !value.isBlank() && !"-".equals(value.trim());
+    }
+
+    private String fundingProgressText() {
+        long current = stats.fundingCurrentGp();
+        long target = stats.fundingTargetGp();
+        long missing = Math.max(0L, target - current);
+        long projected = stats.fundingProjectedGp();
+        String text = "GP " + current + "/" + target + " | falta " + missing;
+        if (projected > current) {
+            text += " | proj " + projected;
+        }
+        return text;
     }
 
     private String shortText(String value, int maxChars) {

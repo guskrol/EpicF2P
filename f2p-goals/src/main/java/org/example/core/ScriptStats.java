@@ -52,6 +52,9 @@ public class ScriptStats {
     private volatile String internalPhase = "starting";
     private volatile String nextObjective = "Starting";
     private volatile String lastFundingReason = "-";
+    private volatile long fundingCurrentGp;
+    private volatile long fundingTargetGp;
+    private volatile long fundingProjectedGp;
     private volatile String lastRecoverableError = "-";
 
     public long runtimeMillis() {
@@ -284,6 +287,18 @@ public class ScriptStats {
         return lastFundingReason;
     }
 
+    public long fundingCurrentGp() {
+        return fundingCurrentGp;
+    }
+
+    public long fundingTargetGp() {
+        return fundingTargetGp;
+    }
+
+    public long fundingProjectedGp() {
+        return fundingProjectedGp;
+    }
+
     public String lastRecoverableError() {
         return lastRecoverableError;
     }
@@ -291,7 +306,34 @@ public class ScriptStats {
     public void setFundingReason(String reason) {
         String sanitized = sanitize(reason, "-");
         lastFundingReason = sanitized;
+        fundingCurrentGp = 0L;
+        fundingTargetGp = 0L;
+        fundingProjectedGp = 0L;
         recordEvent("Funding: " + sanitized);
+    }
+
+    public void setFundingReason(String reason, long currentGp, long targetGp) {
+        setFundingReason(reason, currentGp, targetGp, currentGp);
+    }
+
+    public void setFundingReason(String reason, long currentGp, long targetGp, long projectedGp) {
+        String sanitized = sanitize(reason, "-");
+        boolean shouldRecord = !sanitized.equals(lastFundingReason)
+                || fundingTargetGp != Math.max(0L, targetGp);
+        lastFundingReason = sanitized;
+        fundingCurrentGp = Math.max(0L, currentGp);
+        fundingTargetGp = Math.max(0L, targetGp);
+        fundingProjectedGp = Math.max(fundingCurrentGp, projectedGp);
+        if (shouldRecord) {
+            recordEvent("Funding: " + sanitized + " | GP " + fundingCurrentGp + "/" + fundingTargetGp);
+        }
+    }
+
+    public void clearFundingReason() {
+        lastFundingReason = "-";
+        fundingCurrentGp = 0L;
+        fundingTargetGp = 0L;
+        fundingProjectedGp = 0L;
     }
 
     public void recordRelevantLog(String message) {

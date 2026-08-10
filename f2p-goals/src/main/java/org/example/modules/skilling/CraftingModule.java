@@ -453,7 +453,7 @@ public class CraftingModule extends AbstractSkillingModule {
                 + (inventoryCoins + bankCoins) + "/" + targetCost
                 + "); running " + fundingMethodLabel(decision.method())
                 + " until " + activeFundingTargetCoins + " gp");
-        stats.setFundingReason("Crafting " + fundingMethodLabel(decision.method()) + " for " + targetItem);
+        updateCraftingFundingProgress(ctx);
         Time.sleep(900, 1400);
     }
 
@@ -470,14 +470,11 @@ public class CraftingModule extends AbstractSkillingModule {
                     + " inv=" + decision.inventoryCount()
                     + " bank=" + decision.bankCount()
                     + " projected~" + decision.projectedValue() + "gp");
-            stats.setFundingReason("Crafting stock sale: " + decision.itemName()
-                    + " for " + activeFundingTargetItem);
         } else {
             log("Crafting FundingPlanner selected " + fundingMethodLabel(decision.method())
                     + " for " + activeFundingTargetItem);
-            stats.setFundingReason("Crafting " + fundingMethodLabel(decision.method())
-                    + " for " + activeFundingTargetItem);
         }
+        updateCraftingFundingProgress(ctx);
         return decision;
     }
 
@@ -521,13 +518,13 @@ public class CraftingModule extends AbstractSkillingModule {
         nextPendingFundingSellCheckAt = 0L;
         log("Crafting funding selected stock sale: " + pendingFundingSellQuantity
                 + "x " + pendingFundingSellItem + " for " + activeFundingTargetItem);
-        stats.setFundingReason("Crafting stock sale: " + pendingFundingSellItem
-                + " for " + activeFundingTargetItem);
+        updateCraftingFundingProgress(ctx);
         withdrawFundingStockFromBank(ctx);
     }
 
     private boolean handleCraftingFundingPool(APIContext ctx) {
         if (pendingFundingSellItem != null) {
+            updateCraftingFundingProgress(ctx);
             handlePendingFundingSale(ctx);
             return true;
         }
@@ -536,6 +533,7 @@ public class CraftingModule extends AbstractSkillingModule {
             return false;
         }
 
+        updateCraftingFundingProgress(ctx);
         int knownCoins = knownCraftingFundingCoins(ctx);
         if (activeFundingTargetCoins > 0 && knownCoins >= activeFundingTargetCoins) {
             log("Crafting funding target reached for " + activeFundingTargetItem
@@ -1470,6 +1468,41 @@ public class CraftingModule extends AbstractSkillingModule {
         return coins;
     }
 
+    private void updateCraftingFundingProgress(APIContext ctx) {
+        if (activeFundingTargetCoins <= 0) {
+            return;
+        }
+
+        int knownCoins = knownCraftingFundingCoins(ctx);
+        stats.setFundingReason(
+                craftingFundingDisplayLabel(),
+                knownCoins,
+                activeFundingTargetCoins,
+                projectedCraftingFundingGp(ctx, knownCoins)
+        );
+    }
+
+    private String craftingFundingDisplayLabel() {
+        String targetItem = activeFundingTargetItem == null || activeFundingTargetItem.isBlank()
+                ? "target"
+                : activeFundingTargetItem;
+        if (pendingFundingSellItem != null) {
+            return "Crafting stock sale: " + pendingFundingSellItem + " for " + targetItem;
+        }
+        if (activeFundingDecision != null) {
+            return "Crafting " + fundingMethodLabel(activeFundingDecision.method()) + " for " + targetItem;
+        }
+        return "Crafting funding for " + targetItem;
+    }
+
+    private long projectedCraftingFundingGp(APIContext ctx, int knownCoins) {
+        long projected = Math.max(0, knownCoins);
+        for (FundingPlanner.Asset asset : craftingFundingAssets(ctx)) {
+            projected += (long) asset.totalCount() * asset.unitSellPrice();
+        }
+        return projected;
+    }
+
     private String fundingMethodLabel(FundingPlanner.Method method) {
         if (method == FundingPlanner.Method.BEER_GLASS) {
             return "Beer glass";
@@ -1644,6 +1677,7 @@ public class CraftingModule extends AbstractSkillingModule {
         activeFundingTargetItem = null;
         activeFundingTargetCoins = 0;
         clearPendingFundingSale();
+        stats.clearFundingReason();
     }
 
     private void logInterfaceRecovery(String message) {

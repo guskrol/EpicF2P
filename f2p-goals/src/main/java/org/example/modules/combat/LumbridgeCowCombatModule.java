@@ -1895,6 +1895,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
         log("Starting FundingPlanner for " + woodcuttingFundingGearName
                 + " (" + reason + "). Target: " + woodcuttingFundingTargetCoins
                 + " coins, WC fallback est. logs: " + logsNeeded);
+        updateCombatFundingProgress(ctx, woodcuttingFundingTargetCoins);
     }
 
     private boolean shouldFundStarterFood(APIContext ctx) {
@@ -1923,6 +1924,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return true;
         }
 
+        updateCombatFundingProgress(ctx, targetCoins);
         boolean geRestrictionActive = isGeRestrictionRetryActive();
         FundingPlanner.Decision decision = null;
         if (geRestrictionActive || knownCoins(ctx) < targetCoins) {
@@ -2072,6 +2074,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
             geRestrictionRetryAt = 0;
             gearPurchaseDeferredUntil = 0;
         }
+        stats.clearFundingReason();
     }
 
     private boolean isGeRestrictionRetryActive() {
@@ -2126,6 +2129,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
                 && !isFundingItemBlockedByGe(activeFundingDecision.itemName())
                 && (inventoryFundingItemCount(ctx, activeFundingDecision.itemName()) > 0
                 || fundingItemCountInBank(ctx, activeFundingDecision.itemName()) > 0)) {
+            updateCombatFundingProgress(ctx, targetCoins);
             return activeFundingDecision;
         }
 
@@ -2138,12 +2142,16 @@ public class LumbridgeCowCombatModule implements F2PModule {
                     + " bank=" + activeFundingDecision.bankCount()
                     + " projected~" + activeFundingDecision.projectedValue() + "gp");
             stats.setFundingReason("Stock sale: " + activeFundingDecision.itemName()
-                    + " for " + fundingTargetName());
+                    + " for " + fundingTargetName(),
+                    knownCoins(ctx),
+                    targetCoins,
+                    projectedCombatFundingGp(ctx, knownCoins(ctx)));
             return activeFundingDecision;
         }
 
         if (activeFundingDecision != null
                 && activeFundingDecision.method() != FundingPlanner.Method.SELL_READY_STOCK) {
+            updateCombatFundingProgress(ctx, targetCoins);
             return activeFundingDecision;
         }
 
@@ -2155,14 +2163,45 @@ public class LumbridgeCowCombatModule implements F2PModule {
                     + " bank=" + activeFundingDecision.bankCount()
                     + " projected~" + activeFundingDecision.projectedValue() + "gp");
             stats.setFundingReason("Stock sale: " + activeFundingDecision.itemName()
-                    + " for " + fundingTargetName());
+                    + " for " + fundingTargetName(),
+                    knownCoins(ctx),
+                    targetCoins,
+                    projectedCombatFundingGp(ctx, knownCoins(ctx)));
         } else {
             log("FundingPlanner selected " + fundingMethodLabel(activeFundingDecision.method())
                     + " for " + fundingTargetName());
             stats.setFundingReason(fundingMethodLabel(activeFundingDecision.method())
-                    + " for " + fundingTargetName());
+                    + " for " + fundingTargetName(),
+                    knownCoins(ctx),
+                    targetCoins,
+                    projectedCombatFundingGp(ctx, knownCoins(ctx)));
         }
         return activeFundingDecision;
+    }
+
+    private void updateCombatFundingProgress(APIContext ctx, int targetCoins) {
+        if (targetCoins <= 0) {
+            return;
+        }
+
+        int knownCoins = knownCoins(ctx);
+        stats.setFundingReason(
+                activeFundingMethodLabel() + " for " + fundingTargetName(),
+                knownCoins,
+                targetCoins,
+                projectedCombatFundingGp(ctx, knownCoins)
+        );
+    }
+
+    private long projectedCombatFundingGp(APIContext ctx, int knownCoins) {
+        long projected = Math.max(0, knownCoins);
+        for (FundingPlanner.Asset asset : fundingAssets(ctx)) {
+            projected += (long) asset.totalCount() * asset.unitSellPrice();
+        }
+        if (woodcuttingFundingBankAudited && !ctx.bank().isOpen() && woodcuttingFundingBankLogsSnapshot > 0) {
+            projected += (long) woodcuttingFundingBankLogsSnapshot * sellPriceFor(ctx, WC_FUNDING_LOG_NAME);
+        }
+        return projected;
     }
 
     private List<FundingPlanner.Asset> fundingAssets(APIContext ctx) {
