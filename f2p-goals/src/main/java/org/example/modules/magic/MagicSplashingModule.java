@@ -520,12 +520,13 @@ public class MagicSplashingModule implements ManagedF2PModule {
         splashGearBankChecked = true;
 
         int targetCasts = splashTargetCastsFor(splashSpell);
-        for (RuneNeed need : runeNeedsFor(splashSpell)) {
+        for (String runeName : runeNamesFor(splashSpell)) {
+            int perCast = runePerCast(splashSpell, runeName);
             if (ensureRuneStock(
                     ctx,
-                    need.itemName(),
-                    MIN_SPLASH_CASTS_READY * need.perCast(),
-                    targetCasts * need.perCast()
+                    runeName,
+                    MIN_SPLASH_CASTS_READY * perCast,
+                    targetCasts * perCast
             )) {
                 return true;
             }
@@ -1899,25 +1900,37 @@ public class MagicSplashingModule implements ManagedF2PModule {
         return activeSplashBatchTargetCasts;
     }
 
-    private RuneNeed[] runeNeedsFor(Spell spell) {
+    private String[] runeNamesFor(Spell spell) {
         if (spell == CURSE_SPLASH_SPELL) {
-            return new RuneNeed[]{
-                    new RuneNeed(WATER_RUNE, 2),
-                    new RuneNeed(EARTH_RUNE, 3),
-                    new RuneNeed(BODY_RUNE, 1)
-            };
+            return new String[]{WATER_RUNE, EARTH_RUNE, BODY_RUNE};
         }
 
-        return new RuneNeed[]{
-                new RuneNeed(AIR_RUNE, 2),
-                new RuneNeed(MIND_RUNE, 1),
-                new RuneNeed(FIRE_RUNE, 3)
-        };
+        return new String[]{AIR_RUNE, MIND_RUNE, FIRE_RUNE};
+    }
+
+    private int runePerCast(Spell spell, String runeName) {
+        if (spell == CURSE_SPLASH_SPELL) {
+            if (namesMatch(runeName, WATER_RUNE)) {
+                return 2;
+            }
+            if (namesMatch(runeName, EARTH_RUNE)) {
+                return 3;
+            }
+            return 1;
+        }
+
+        if (namesMatch(runeName, AIR_RUNE)) {
+            return 2;
+        }
+        if (namesMatch(runeName, FIRE_RUNE)) {
+            return 3;
+        }
+        return 1;
     }
 
     private boolean hasSplashRuneBatchReady(APIContext ctx, Spell spell) {
-        for (RuneNeed need : runeNeedsFor(spell)) {
-            if (ctx.inventory().getCount(true, need.itemName()) < MIN_SPLASH_CASTS_READY * need.perCast()) {
+        for (String runeName : runeNamesFor(spell)) {
+            if (ctx.inventory().getCount(true, runeName) < MIN_SPLASH_CASTS_READY * runePerCast(spell, runeName)) {
                 return false;
             }
         }
@@ -1925,8 +1938,8 @@ public class MagicSplashingModule implements ManagedF2PModule {
     }
 
     private boolean hasEnoughForSplashCast(APIContext ctx, Spell spell) {
-        for (RuneNeed need : runeNeedsFor(spell)) {
-            if (ctx.inventory().getCount(true, need.itemName()) < need.perCast()) {
+        for (String runeName : runeNamesFor(spell)) {
+            if (ctx.inventory().getCount(true, runeName) < runePerCast(spell, runeName)) {
                 return false;
             }
         }
@@ -1944,13 +1957,13 @@ public class MagicSplashingModule implements ManagedF2PModule {
 
     private String splashRuneStatus(APIContext ctx, Spell spell) {
         StringBuilder builder = new StringBuilder();
-        for (RuneNeed need : runeNeedsFor(spell)) {
+        for (String runeName : runeNamesFor(spell)) {
             if (builder.length() > 0) {
                 builder.append(' ');
             }
-            builder.append(need.itemName().replace(" rune", ""))
+            builder.append(runeName.replace(" rune", ""))
                     .append('=')
-                    .append(ctx.inventory().getCount(true, need.itemName()));
+                    .append(ctx.inventory().getCount(true, runeName));
         }
         return builder.toString();
     }
@@ -2279,9 +2292,6 @@ public class MagicSplashingModule implements ManagedF2PModule {
     }
 
     private record SplashGearSlot(IEquipmentAPI.Slot slot, String action, SplashGearItem[] items) {
-    }
-
-    private record RuneNeed(String itemName, int perCast) {
     }
 
     private record FundingStock(String itemName, int quantity, int sellPrice) {
