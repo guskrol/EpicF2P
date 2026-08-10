@@ -29,6 +29,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
     private int pendingToolBuyPrice;
     private long toolPurchaseRetryAt;
     private long pendingToolOfferCheckAt;
+    private boolean pendingToolBankChecked;
     private int cleanInventoryDepositAttempts;
     private int cleanInventoryLastNonKeepCount = -1;
     private long cleanInventoryBypassUntil;
@@ -135,6 +136,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
         pendingToolPurchase = toolName;
         pendingToolBuyPrice = buyPrice;
         pendingToolOfferCheckAt = 0L;
+        pendingToolBankChecked = false;
         if (inventoryCoins < buyPrice && bankCoins > 0) {
             int neededCoins = Math.min(buyPrice - inventoryCoins, bankCoins);
             log("Withdrawing " + neededCoins + " coins for missing " + toolLabel + ": " + toolName);
@@ -213,6 +215,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
             pendingToolPurchase = desiredTool;
             pendingToolBuyPrice = buyPrice;
             pendingToolOfferCheckAt = 0L;
+            pendingToolBankChecked = false;
             int neededCoins = Math.min(buyPrice - inventoryCoins, bankCoins);
             log("Withdrawing " + neededCoins + " coins for " + desiredTool);
             ctx.bank().withdraw(neededCoins, "Coins");
@@ -223,6 +226,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
         pendingToolPurchase = desiredTool;
         pendingToolBuyPrice = buyPrice;
         pendingToolOfferCheckAt = 0L;
+        pendingToolBankChecked = false;
         log("Planning " + toolLabel + " upgrade: " + desiredTool);
         ctx.bank().close();
         Time.sleep(600, 900);
@@ -244,7 +248,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
             return true;
         }
 
-        if (pendingToolOfferCheckAt == 0L && checkBankForPendingTool(ctx, toolLabel)) {
+        if (!pendingToolBankChecked && checkBankForPendingTool(ctx, toolLabel)) {
             return true;
         }
 
@@ -331,6 +335,8 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
             Time.sleep(1200, 1800, () -> isBankOpen(ctx), 100);
             return true;
         }
+
+        pendingToolBankChecked = true;
 
         if (!bankHasItem(ctx, pendingToolPurchase)) {
             return false;
@@ -512,6 +518,7 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
         pendingToolPurchase = null;
         pendingToolBuyPrice = 0;
         pendingToolOfferCheckAt = 0L;
+        pendingToolBankChecked = false;
     }
 
     protected boolean bankAllExcept(APIContext ctx, String reason, String... keepNames) {

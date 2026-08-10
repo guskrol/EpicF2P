@@ -223,7 +223,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
     private void mineUntilInventoryFull(APIContext ctx) {
         stats.setTrainingSkill("Mining");
 
-        if (oreCount(ctx) == 0 && ensureToolUpgrade(ctx, "pickaxe", desiredPickaxeUpgrade(ctx))) {
+        if (!fundingMode && oreCount(ctx) == 0 && ensureToolUpgrade(ctx, "pickaxe", desiredPickaxeUpgrade(ctx))) {
             return;
         }
 
