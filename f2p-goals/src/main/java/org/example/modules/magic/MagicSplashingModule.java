@@ -20,6 +20,7 @@ import org.example.core.funding.FundingPlanner;
 import org.example.core.items.F2PItemRegistry;
 import org.example.core.items.GePricing;
 import org.example.core.navigation.Navigation;
+import org.example.core.runtime.WorldHopController;
 import org.example.modules.moneymaking.BeerGlassCollectorModule;
 import org.example.modules.skilling.FishingCookingModule;
 import org.example.modules.skilling.MiningSmithingModule;
@@ -153,6 +154,12 @@ public class MagicSplashingModule implements ManagedF2PModule {
     private static final int CURSED_STAFF_DIANGO_COINS = 45;
     private static final int MAGIC_FUNDING_BUFFER_COINS = 800;
     private static final long SPLASH_TARGET_BLOCK_MILLIS = 20_000L;
+    private static final long SPLASH_CONTENTION_WINDOW_MILLIS = 90_000L;
+    private static final int SPLASH_CONTENTION_HOP_THRESHOLD = 3;
+    private static final long SPLASH_CONTENTION_HOP_COOLDOWN_MILLIS = 10 * 60_000L;
+    private static final long SPLASH_CROWD_CHECK_INTERVAL_MILLIS = 15_000L;
+    private static final int SPLASH_CROWDED_PLAYER_THRESHOLD = 6;
+    private static final int SPLASH_MAX_TARGET_WORLD_POPULATION = 900;
     private static final Area CHICKEN_AREA = new Area(
             new Tile(3226, 3301, 0),
             new Tile(3225, 3299, 0),
@@ -199,6 +206,10 @@ public class MagicSplashingModule implements ManagedF2PModule {
     private Tile lastSplashTargetTile;
     private Tile blockedSplashTargetTile;
     private long blockedSplashTargetUntil;
+    private int splashContentionCount;
+    private long firstSplashContentionAt;
+    private long nextSplashContentionHopAt;
+    private long nextSplashCrowdCheckAt;
     private boolean magicGearBankChecked;
     private boolean splashGearBankChecked;
     private boolean cursedStaffBankAudited;
@@ -1472,7 +1483,10 @@ public class MagicSplashingModule implements ManagedF2PModule {
             return;
         }
 
-        handleRecentContestedSplashTarget();
+        if (handleRecentContestedSplashTarget(ctx) || handleCrowdedSplashWorld(ctx)) {
+            return;
+        }
+
         NPC target = findSplashTarget(ctx);
         if (target == null || !target.isValid()) {
             debugNoSplashTarget(ctx);
@@ -1492,7 +1506,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
                             || target.isInCombat(),
                     100
             );
-            handleRecentContestedSplashTarget();
+            handleRecentContestedSplashTarget(ctx);
         } else {
             Time.sleep(500, 800);
         }
@@ -1541,7 +1555,10 @@ public class MagicSplashingModule implements ManagedF2PModule {
             return;
         }
 
-        handleRecentContestedSplashTarget();
+        if (handleRecentContestedSplashTarget(ctx) || handleCrowdedSplashWorld(ctx)) {
+            return;
+        }
+
         NPC target = findSplashTarget(ctx);
         if (target == null || !target.isValid()) {
             debugNoSplashTarget(ctx);
@@ -1566,7 +1583,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
                         || !hasEnoughForSplashCast(ctx, splashSpell),
                 100
         );
-        handleRecentContestedSplashTarget();
+        handleRecentContestedSplashTarget(ctx);
 
         if (!cast) {
             log("Manual cast did not start for " + splashSpell.getSpellName() + "; retrying target/spell");
@@ -1593,21 +1610,115 @@ public class MagicSplashingModule implements ManagedF2PModule {
         lastSplashTargetTile = target == null ? null : target.getLocation();
     }
 
-    private boolean handleRecentContestedSplashTarget() {
+    private boolean handleRecentContestedSplashTarget(APIContext ctx) {
         if (!stats.consumeRecentAlreadyUnderAttackMessage()) {
             return false;
         }
 
+        recordSplashContention();
         if (lastSplashTargetTile != null) {
             blockedSplashTargetTile = lastSplashTargetTile;
             blockedSplashTargetUntil = System.currentTimeMillis() + SPLASH_TARGET_BLOCK_MILLIS;
             log("Avoiding busy Seagull at " + blockedSplashTargetTile.getX()
                     + "," + blockedSplashTargetTile.getY());
             lastSplashTargetTile = null;
-            return true;
         }
 
-        return false;
+        if (splashContentionCount >= SPLASH_CONTENTION_HOP_THRESHOLD
+                && System.currentTimeMillis() >= nextSplashContentionHopAt) {
+            return hopSplashWorld(ctx, "repeated contested Seagull targets");
+        }
+
+        return true;
+    }
+
+    private void recordSplashContention() {
+        long now = System.currentTimeMillis();
+        if (firstSplashContentionAt <= 0L
+                || now - firstSplashContentionAt > SPLASH_CONTENTION_WINDOW_MILLIS) {
+            firstSplashContentionAt = now;
+            splashContentionCount = 0;
+        }
+        splashContentionCount++;
+    }
+
+    private boolean handleCrowdedSplashWorld(APIContext ctx) {
+        long now = System.currentTimeMillis();
+        if (now < nextSplashCrowdCheckAt || now < nextSplashContentionHopAt) {
+            return false;
+        }
+
+        nextSplashCrowdCheckAt = now + SPLASH_CROWD_CHECK_INTERVAL_MILLIS;
+        int nearbyPlayers = nearbySplashPlayerCount(ctx);
+        if (nearbyPlayers < SPLASH_CROWDED_PLAYER_THRESHOLD) {
+            return false;
+        }
+
+        return hopSplashWorld(ctx, "crowded Seagull area (" + nearbyPlayers + " players)");
+    }
+
+    private int nearbySplashPlayerCount(APIContext ctx) {
+        try {
+            return ctx.players()
+                    .query()
+                    .within(PORT_SARIM_SEAGULL_AREA)
+                    .results()
+                    .size();
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
+    }
+
+    private boolean hopSplashWorld(APIContext ctx, String reason) {
+        if (!canHopForSplash(ctx)) {
+            return false;
+        }
+
+        int currentWorld = ctx.world().getCurrent();
+        log("Splashing world hop: " + reason + "; current world " + currentWorld);
+        stats.setStatus("Splashing world hop: " + reason);
+
+        boolean hopped = ctx.world().hop(world -> WorldHopController.isSafeF2PWorld(world, currentWorld)
+                && world.getPopulation() <= SPLASH_MAX_TARGET_WORLD_POPULATION);
+        if (!hopped) {
+            log("Splashing predicate hop failed; trying generic F2P hop");
+            hopped = ctx.world().hopToF2P();
+        }
+
+        Time.sleep(2500, 5000);
+        if (ctx.world().isWorldMenuOpen()) {
+            ctx.tabs().open(ITabsAPI.Tabs.INVENTORY);
+            Time.sleep(600, 900, () -> !ctx.world().isWorldMenuOpen(), 100);
+        }
+
+        if (hopped) {
+            log("Splashing hop requested. Current world: " + ctx.world().getCurrent());
+        } else {
+            log("Splashing hop could not be requested");
+        }
+
+        blockedSplashTargetTile = null;
+        blockedSplashTargetUntil = 0L;
+        lastSplashTargetTile = null;
+        splashContentionCount = 0;
+        firstSplashContentionAt = 0L;
+        nextSplashContentionHopAt = System.currentTimeMillis() + SPLASH_CONTENTION_HOP_COOLDOWN_MILLIS;
+        nextSplashCrowdCheckAt = System.currentTimeMillis() + SPLASH_CROWD_CHECK_INTERVAL_MILLIS;
+        return true;
+    }
+
+    private boolean canHopForSplash(APIContext ctx) {
+        return !isBankOpen(ctx)
+                && !ctx.grandExchange().isOpen()
+                && !ctx.store().isOpen()
+                && !ctx.widgets().isInterfaceOpen()
+                && !ctx.dialogues().isDialogueOpen()
+                && !ctx.menu().isOpen()
+                && !ctx.inventory().isItemSelected()
+                && !ctx.world().isWorldMenuOpen()
+                && !ctx.localPlayer().isMoving()
+                && !ctx.localPlayer().isAnimating()
+                && !ctx.localPlayer().isAttacking();
     }
 
     private boolean isBlockedSplashTarget(NPC target) {

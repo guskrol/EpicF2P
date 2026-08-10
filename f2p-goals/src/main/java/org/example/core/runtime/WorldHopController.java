@@ -86,7 +86,7 @@ public class WorldHopController implements RuntimeController {
         int currentWorld = ctx.world().getCurrent();
         logger.accept("[WorldHop] Looking for safe F2P world from " + currentWorld);
 
-        boolean hopped = ctx.world().hop(world -> isCandidate(world, currentWorld));
+        boolean hopped = ctx.world().hop(world -> isSafeF2PWorld(world, currentWorld));
         if (!hopped) {
             logger.accept("[WorldHop] Predicate hop failed; trying generic F2P hop");
             hopped = ctx.world().hopToF2P();
@@ -108,7 +108,7 @@ public class WorldHopController implements RuntimeController {
         scheduleNextHop();
     }
 
-    private boolean isCandidate(World world, int currentWorld) {
+    public static boolean isSafeF2PWorld(World world, int currentWorld) {
         if (world == null || world.getId() == currentWorld || world.isMembers()) {
             return false;
         }
