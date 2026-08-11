@@ -17,16 +17,22 @@ public final class GePricing {
     public static int quickBuyPrice(APIContext ctx, String itemName, long fallbackBasePrice) {
         int fixed = F2PItemRegistry.buyPrice(itemName);
         long market = marketBuyReference(ctx, itemName);
-        long price = market > 0L ? buyPremium(market) : 1L;
+        boolean fixedStackable = F2PItemRegistry.hasFixedStackableBuyPrice(itemName);
+        long price = market > 0L ? buyPremium(market) : (fixedStackable ? fixed : 1L);
 
         price = Math.max(price, fixed);
-        price = Math.max(price, fallbackBasePrice);
+        if (!fixedStackable) {
+            price = Math.max(price, fallbackBasePrice);
+        }
         return clampPrice(price);
     }
 
     public static int exchangeQuickBuyPrice(APIContext ctx, String itemName, long fallbackBasePrice) {
         long market = marketBuyReference(ctx, itemName);
-        long fallback = Math.max(fallbackBasePrice, F2PItemRegistry.buyPrice(itemName));
+        boolean fixedStackable = F2PItemRegistry.hasFixedStackableBuyPrice(itemName);
+        long fallback = fixedStackable
+                ? F2PItemRegistry.buyPrice(itemName)
+                : Math.max(fallbackBasePrice, F2PItemRegistry.buyPrice(itemName));
         long price = market > 0L ? buyPremium(market) : Math.max(1L, fallback);
         return clampPrice(price);
     }

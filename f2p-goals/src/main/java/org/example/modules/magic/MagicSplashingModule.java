@@ -700,7 +700,8 @@ public class MagicSplashingModule implements ManagedF2PModule {
 
         if (inventoryCoins < cost && bankCoins > 0) {
             int toWithdraw = Math.min(bankCoins, cost - inventoryCoins);
-            log("Withdrawing coins for Magic buy: " + toWithdraw);
+            log("Withdrawing coins for Magic buy: " + toWithdraw
+                    + " (" + quantity + "x " + itemName + " at " + price + " each = " + cost + ")");
             ctx.bank().withdraw(toWithdraw, "Coins");
             Time.sleep(500, 800);
             return true;
@@ -719,7 +720,8 @@ public class MagicSplashingModule implements ManagedF2PModule {
         awaitingHighPriceConfirmation = false;
         highPriceConfirmationAttempts = 0;
         highPriceConfirmationStartedAt = 0L;
-        log("Planning Magic buy: " + quantity + "x " + itemName + " at " + price + " each");
+        log("Planning Magic buy: " + quantity + "x " + itemName
+                + " at " + price + " each = " + cost + " gp");
         closeBank(ctx);
         Time.sleep(500, 800);
         return true;
@@ -819,7 +821,9 @@ public class MagicSplashingModule implements ManagedF2PModule {
 
         activeFundingDecision = decision;
         log("Magic funding pool selected " + fundingMethodLabel(decision.method())
-                + " for " + targetItem + " (" + activeFundingTargetCoins + " gp target)");
+                + " for " + targetItem + " (cost=" + targetCost
+                + ", coins=" + (inventoryCoins + bankCoins)
+                + ", target=" + activeFundingTargetCoins + ")");
         updateMagicFundingProgress(ctx);
         return true;
     }
@@ -2104,6 +2108,15 @@ public class MagicSplashingModule implements ManagedF2PModule {
             return 5L;
         }
         if (normalized.equals("firerune")) {
+            return 5L;
+        }
+        if (normalized.equals("waterrune")) {
+            return 7L;
+        }
+        if (normalized.equals("earthrune")) {
+            return 8L;
+        }
+        if (normalized.equals("bodyrune")) {
             return 5L;
         }
         if (normalized.equals("staffofair")) {
