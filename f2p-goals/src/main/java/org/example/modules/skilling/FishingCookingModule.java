@@ -662,7 +662,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
             return true;
         }
 
-        log("Walking around Al Kharid gate to bank for Cooking");
+        log("Walking to Al Kharid bank with webwalking for Cooking");
         Navigation.walkTo(ctx, AL_KHARID_BANK.getRandomTile());
         Time.sleep(1200, 1800);
         return true;
