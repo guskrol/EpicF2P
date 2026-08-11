@@ -26,7 +26,8 @@ public final class GePricing {
 
     public static int exchangeQuickBuyPrice(APIContext ctx, String itemName, long fallbackBasePrice) {
         long market = marketBuyReference(ctx, itemName);
-        long price = market > 0L ? buyPremium(market) : Math.max(1L, fallbackBasePrice);
+        long fallback = Math.max(fallbackBasePrice, F2PItemRegistry.buyPrice(itemName));
+        long price = market > 0L ? buyPremium(market) : Math.max(1L, fallback);
         return clampPrice(price);
     }
 
@@ -71,6 +72,10 @@ public final class GePricing {
         long wiki = wikiBuyReference(itemName);
         if (wiki > 0L) {
             return wiki;
+        }
+
+        if (F2PItemRegistry.hasFixedStackableBuyPrice(itemName)) {
+            return 0L;
         }
 
         ItemDetail detail = itemDetail(ctx, itemName);

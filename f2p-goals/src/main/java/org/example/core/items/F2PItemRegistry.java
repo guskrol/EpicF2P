@@ -20,7 +20,7 @@ public final class F2PItemRegistry {
         register(new ItemRule("Hard leather", false, false, 0, 0, false, false, true, 0));
         register(new ItemRule("Leather", false, false, 0, 0, false, false, true, 0));
         register(new ItemRule("Needle", false, false, 0, 0, false, false, true, 0));
-        register(new ItemRule("Thread", false, false, 0, 0, false, true, true, 0));
+        register(new ItemRule("Thread", false, false, 15, 0, false, true, true, 0));
         register(new ItemRule("Feather", false, false, 0, 0, false, true, true, 0));
         register(new ItemRule("Feathers", false, false, 0, 0, false, true, true, 0));
         register(new ItemRule("Shrimps", false, true, 0, 0, false, false, true, 0));
@@ -114,6 +114,11 @@ public final class F2PItemRegistry {
     public static boolean isStackable(String itemName) {
         ItemRule rule = lookup(itemName);
         return rule != null && rule.stackable();
+    }
+
+    public static boolean hasFixedStackableBuyPrice(String itemName) {
+        ItemRule rule = lookup(itemName);
+        return rule != null && rule.stackable() && rule.buyPrice() > 0;
     }
 
     public static boolean isNoteable(String itemName) {
