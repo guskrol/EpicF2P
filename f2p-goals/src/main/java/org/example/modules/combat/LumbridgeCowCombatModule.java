@@ -93,6 +93,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private static final int MELEE_PLAN_MIN_XP = 3500;
     private static final int MELEE_PLAN_MAX_XP = 11000;
     private static final Area GE_AREA = new Area(3160, 3478, 3175, 3490);
+    private static final Area EDGE_HOBGOBLIN_ROUTE_GATE_SEARCH = new Area(3113, 9866, 3138, 9890);
+    private static final Tile EDGE_HOBGOBLIN_GATE_APPROACH_TILE = new Tile(3132, 9877, 0);
+    private static final Tile EDGE_HOBGOBLIN_ROOM_TILE = new Tile(3125, 9877, 0);
     private static final String[] GEAR_FUNDING_ITEMS = F2PItemRegistry.fundingSellItems();
     private static final String[] NON_SELLABLE_FUNDING_ITEMS = F2PItemRegistry.restrictedGeItems();
     private static final String[] WC_FUNDING_AXES = {
@@ -482,6 +485,12 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
         if (lootCowDrops(ctx)) {
             logCombatDecision("Combat decision: looting own drop");
+            return;
+        }
+
+        if (prepareGatedCombatTarget(ctx, combatArea)) {
+            logCombatDecision("Combat decision: gated target route handled");
+            Time.sleep(800, 1200);
             return;
         }
 
@@ -1075,6 +1084,54 @@ public class LumbridgeCowCombatModule implements F2PModule {
         return activeTarget(ctx).lootNames();
     }
 
+    private boolean prepareGatedCombatTarget(APIContext ctx, Area combatArea) {
+        if (!isEdgeHobgoblinTarget(ctx)) {
+            return false;
+        }
+
+        if (findReachableCombatTarget(ctx, combatArea) != null) {
+            return false;
+        }
+
+        NPC visibleTarget = findAnyCombatTarget(ctx, combatArea);
+        if (visibleTarget != null && visibleTarget.isValid()) {
+            Tile targetTile = visibleTarget.getLocation();
+            if (openBlockingRouteObject(ctx, targetTile, "Hobgoblin gate")) {
+                return true;
+            }
+        }
+
+        SceneObject gate = findHobgoblinRouteGate(ctx);
+        if (gate != null && gate.isValid()) {
+            if (gate.tileDistanceTo(ctx) > 2) {
+                log("Walking to Hobgoblin gate before attacking");
+                walkToTile(ctx, gate.getLocation(), "Hobgoblin gate");
+                return true;
+            }
+
+            return tryOpenRouteObject(ctx, gate, "Hobgoblin gate");
+        }
+
+        if (!combatArea.contains(ctx.localPlayer().getLocation())) {
+            log("Routing to Hobgoblin gate approach before combat");
+            walkToTile(ctx, EDGE_HOBGOBLIN_GATE_APPROACH_TILE, "Hobgoblin gate approach");
+            return true;
+        }
+
+        if (visibleTarget != null && visibleTarget.isValid()) {
+            log("Hobgoblin is visible but not reachable; repositioning inside the gate route");
+            walkToTile(ctx, EDGE_HOBGOBLIN_ROOM_TILE, "Hobgoblin room");
+            return true;
+        }
+
+        return false;
+    }
+
+    private boolean isEdgeHobgoblinTarget(APIContext ctx) {
+        MobDefinition target = activeTarget(ctx);
+        return target != null && F2PCombatTargets.EDGE_HOBGOBLINS.key().equals(target.key());
+    }
+
     private boolean isCombatActionPending(APIContext ctx, Area combatArea) {
         if (isCombatEngaged(ctx)) {
             clearPendingAttackAttempt();
@@ -1129,7 +1186,28 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return attacker;
         }
 
-        NPC target = ctx.npcs()
+        NPC target = findReachableCombatTarget(ctx, combatArea);
+        if (target != null && target.isValid()) {
+            return target;
+        }
+
+        target = findAnyCombatTarget(ctx, combatArea);
+        if (target != null && target.isValid()) {
+            if (isEdgeHobgoblinTarget(ctx)) {
+                log("Hobgoblin found behind wall/gate; waiting for route access instead of attacking through wall");
+                return null;
+            }
+            log("Found " + target.getName()
+                    + " inside " + currentTargetLabel(ctx)
+                    + " without reachable filter; attempting attack fallback");
+            return target;
+        }
+
+        return null;
+    }
+
+    private NPC findReachableCombatTarget(APIContext ctx, Area combatArea) {
+        return ctx.npcs()
                 .query()
                 .named(targetNames(ctx))
                 .actions("Attack")
@@ -1138,11 +1216,10 @@ public class LumbridgeCowCombatModule implements F2PModule {
                 .reachable()
                 .results()
                 .nearest();
-        if (target != null && target.isValid()) {
-            return target;
-        }
+    }
 
-        target = ctx.npcs()
+    private NPC findAnyCombatTarget(APIContext ctx, Area combatArea) {
+        return ctx.npcs()
                 .query()
                 .named(targetNames(ctx))
                 .actions("Attack")
@@ -1150,14 +1227,64 @@ public class LumbridgeCowCombatModule implements F2PModule {
                 .within(combatArea)
                 .results()
                 .nearest();
-        if (target != null && target.isValid()) {
-            log("Found " + target.getName()
-                    + " inside " + currentTargetLabel(ctx)
-                    + " without reachable filter; attempting attack fallback");
-            return target;
+    }
+
+    private boolean openBlockingRouteObject(APIContext ctx, Tile targetTile, String label) {
+        if (targetTile == null) {
+            return false;
         }
 
-        return null;
+        SceneObject blocker = ctx.walking().getBlockingObjectBetween(
+                ctx.localPlayer().getLocation(),
+                targetTile
+        );
+        return tryOpenRouteObject(ctx, blocker, label);
+    }
+
+    private SceneObject findHobgoblinRouteGate(APIContext ctx) {
+        SceneObject gate = ctx.objects()
+                .query()
+                .actions("Open")
+                .nameContains("Gate", "Door")
+                .within(EDGE_HOBGOBLIN_ROUTE_GATE_SEARCH)
+                .results()
+                .nearest();
+        if (gate != null && gate.isValid()) {
+            return gate;
+        }
+
+        return ctx.objects()
+                .query()
+                .actions("Open")
+                .within(EDGE_HOBGOBLIN_ROUTE_GATE_SEARCH)
+                .results()
+                .nearest();
+    }
+
+    private boolean tryOpenRouteObject(APIContext ctx, SceneObject object, String label) {
+        if (object == null || !object.isValid()) {
+            return false;
+        }
+        if (!object.hasAction("Open", "Enter", "Walk-through")) {
+            return false;
+        }
+
+        if (object.tileDistanceTo(ctx) > 2) {
+            log("Walking locally to " + label + ": " + object.getName());
+            walkToTile(ctx, object.getLocation(), label);
+            return true;
+        }
+
+        log("Opening " + label + ": " + object.getName());
+        boolean interacted = object.interact("Open")
+                || object.interact("Enter")
+                || object.interact("Walk-through")
+                || ctx.menu().interact("Open", object, false)
+                || ctx.menu().interact("Enter", object, false);
+        if (interacted) {
+            Time.sleep(900, 1600);
+        }
+        return interacted;
     }
 
     private NPC findNpcInteractingWithMe(APIContext ctx, Area combatArea) {
@@ -2781,9 +2908,13 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private boolean isBankOpen(APIContext ctx) {
-        return ctx.bank().isOpen()
-                || hasWidgetText(ctx, "The Bank of Gielinor")
-                || hasWidgetText(ctx, "Bank of Gielinor");
+        if (ctx.bank().isOpen()) {
+            return true;
+        }
+
+        return ctx.widgets().isInterfaceOpen()
+                && (hasVisibleWidgetText(ctx, "The Bank of Gielinor")
+                || hasVisibleWidgetText(ctx, "Bank of Gielinor"));
     }
 
     private void closeBank(APIContext ctx) {

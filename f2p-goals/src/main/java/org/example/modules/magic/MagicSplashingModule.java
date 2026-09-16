@@ -160,6 +160,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
     private static final long SPLASH_CROWD_CHECK_INTERVAL_MILLIS = 15_000L;
     private static final int SPLASH_CROWDED_PLAYER_THRESHOLD = 6;
     private static final int SPLASH_MAX_TARGET_WORLD_POPULATION = 900;
+    private static final long AUTOCAST_TRUST_MILLIS = 8 * 60_000L;
     private static final Area CHICKEN_AREA = new Area(
             new Tile(3226, 3301, 0),
             new Tile(3225, 3299, 0),
@@ -223,6 +224,9 @@ public class MagicSplashingModule implements ManagedF2PModule {
     private int activeFundingTargetCoins;
     private Spell activeSplashBatchSpell;
     private int activeSplashBatchTargetCasts;
+    private Spell trustedAutocastSpell;
+    private long trustedAutocastUntil;
+    private long nextAutocastWarningAt;
 
     public MagicSplashingModule(Consumer<String> logger, ScriptStats stats) {
         this.logger = logger;
@@ -1252,20 +1256,27 @@ public class MagicSplashingModule implements ManagedF2PModule {
             return true;
         }
 
-        if (!ctx.tabs().isOpen(ITabsAPI.Tabs.INVENTORY)) {
-            log("Opening inventory for Magic gear");
-            ctx.tabs().open(ITabsAPI.Tabs.INVENTORY);
-            Time.sleep(350, 650, () -> ctx.tabs().isOpen(ITabsAPI.Tabs.INVENTORY), 100);
-            return true;
-        }
+        if (!ctx.equipment().contains(IEquipmentAPI.Slot.WEAPON, STAFF_OF_AIR)) {
+            if (!ctx.tabs().isOpen(ITabsAPI.Tabs.INVENTORY)) {
+                log("Opening inventory for Magic gear");
+                ctx.tabs().open(ITabsAPI.Tabs.INVENTORY);
+                Time.sleep(350, 650, () -> ctx.tabs().isOpen(ITabsAPI.Tabs.INVENTORY), 100);
+                return true;
+            }
 
-        if (!ctx.equipment().contains(IEquipmentAPI.Slot.WEAPON, STAFF_OF_AIR)
-                && ctx.inventory().contains(STAFF_OF_AIR)) {
-            return equipInventoryItem(ctx, STAFF_OF_AIR, "Wield");
+            if (ctx.inventory().contains(STAFF_OF_AIR)) {
+                return equipInventoryItem(ctx, STAFF_OF_AIR, "Wield");
+            }
         }
 
         for (String gear : OPTIONAL_MAGIC_GEAR) {
             if (!ctx.equipment().contains(gear) && ctx.inventory().contains(gear)) {
+                if (!ctx.tabs().isOpen(ITabsAPI.Tabs.INVENTORY)) {
+                    log("Opening inventory for optional Magic gear");
+                    ctx.tabs().open(ITabsAPI.Tabs.INVENTORY);
+                    Time.sleep(350, 650, () -> ctx.tabs().isOpen(ITabsAPI.Tabs.INVENTORY), 100);
+                    return true;
+                }
                 return equipInventoryItem(ctx, gear, "Wear");
             }
         }
@@ -1378,8 +1389,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
     }
 
     private boolean ensureAutocast(APIContext ctx, Spell spell) {
-        if (ctx.magic().getAutoCastSpell() == spell
-                && ctx.combat().getAttackStyle() == ICombatAPI.AttackStyle.CASTING) {
+        if (autocastReady(ctx, spell)) {
             return false;
         }
 
@@ -1393,17 +1403,50 @@ public class MagicSplashingModule implements ManagedF2PModule {
         boolean set = ctx.magic().setAutoCast(spell, false)
                 || ctx.combat().toggleAttackStyle(ICombatAPI.AttackStyle.CASTING, spell);
         Time.sleep(
-                900,
-                1500,
-                () -> ctx.magic().getAutoCastSpell() == spell
-                        || ctx.combat().getAttackStyle() == ICombatAPI.AttackStyle.CASTING,
+                1400,
+                2300,
+                () -> autocastReady(ctx, spell),
                 100
         );
 
-        if (!set) {
+        if (autocastReady(ctx, spell)) {
+            trustedAutocastSpell = spell;
+            trustedAutocastUntil = System.currentTimeMillis() + AUTOCAST_TRUST_MILLIS;
+            return false;
+        }
+
+        if (set && combatCastingStyleSelected(ctx)) {
+            trustedAutocastSpell = spell;
+            trustedAutocastUntil = System.currentTimeMillis() + AUTOCAST_TRUST_MILLIS;
+            log("Autocast visual/style accepted for " + spell.getSpellName()
+                    + "; continuing despite API spell confirmation lag");
+            return false;
+        }
+
+        long now = System.currentTimeMillis();
+        if (now >= nextAutocastWarningAt) {
             log("Autocast API did not confirm " + spell.getSpellName() + "; retrying");
+            nextAutocastWarningAt = now + 10_000L;
         }
         return true;
+    }
+
+    private boolean autocastReady(APIContext ctx, Spell spell) {
+        if (ctx.magic().getAutoCastSpell() == spell) {
+            trustedAutocastSpell = spell;
+            trustedAutocastUntil = System.currentTimeMillis() + AUTOCAST_TRUST_MILLIS;
+            return true;
+        }
+
+        return trustedAutocastSpell == spell
+                && System.currentTimeMillis() < trustedAutocastUntil
+                && combatCastingStyleSelected(ctx);
+    }
+
+    private boolean combatCastingStyleSelected(APIContext ctx) {
+        ICombatAPI.AttackStyle style = ctx.combat().getAttackStyle();
+        return style == ICombatAPI.AttackStyle.CASTING
+                || style == ICombatAPI.AttackStyle.DEFENSIVE_CASTING;
     }
 
     private void trainWindStrike(APIContext ctx) {
@@ -1510,7 +1553,7 @@ public class MagicSplashingModule implements ManagedF2PModule {
             return;
         }
 
-        if (ctx.magic().getAutoCastSpell() != splashSpell) {
+        if (!autocastReady(ctx, splashSpell)) {
             log(splashSpell.getSpellName() + " autocast not ready; retrying autocast setup");
             return;
         }

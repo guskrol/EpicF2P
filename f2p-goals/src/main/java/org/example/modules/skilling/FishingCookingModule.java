@@ -50,6 +50,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
     private static final int SKILLMULTI_FIRST_ITEM_CHILD = childId(InterfaceID.Skillmulti.A);
     private static final int LEVELUP_GROUP = InterfaceID.LEVELUP_DISPLAY;
     private static final int LEVELUP_CONTINUE_CHILD = childId(InterfaceID.LevelupDisplay.CONTINUE);
+    private static final int MIN_DEFENCE_FOR_DRAYNOR_FISHING = 20;
 
     private boolean cookingBatchActive;
     private boolean preferCookingAfterFishingBank;
@@ -260,6 +261,10 @@ public class FishingCookingModule extends AbstractSkillingModule {
     }
 
     private FishingTarget fishingTarget(APIContext ctx) {
+        if (ctx.skills().get(Skill.Skills.DEFENCE).getRealLevel() < MIN_DEFENCE_FOR_DRAYNOR_FISHING) {
+            return new FishingTarget(AL_KHARID_NET_FISHING, "Al Kharid net fishing spots (Defence < 20)");
+        }
+
         if (AL_KHARID_REGION.contains(ctx.localPlayer().getLocation())
                 || needMoreRawFishForCooking
                 || skillComplete(ctx, Skill.Skills.FISHING)) {

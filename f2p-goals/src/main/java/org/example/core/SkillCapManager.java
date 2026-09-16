@@ -12,8 +12,7 @@ public class SkillCapManager {
     private static final int MAX_CAP = 35;
     private static final int RANGED_CAP = 20;
     private static final int MAGIC_CAP = 20;
-    private static final int MIN_CRAFTING_CAP = 25;
-    private static final int MAX_CRAFTING_CAP = 30;
+    private static final int CRAFTING_CAP = 15;
 
     private final Map<Skill.Skills, Integer> caps = new EnumMap<>(Skill.Skills.class);
 
@@ -29,7 +28,7 @@ public class SkillCapManager {
         addRandomCap(Skill.Skills.COOKING);
         addRandomCap(Skill.Skills.MINING);
         addRandomCap(Skill.Skills.SMITHING);
-        caps.put(Skill.Skills.CRAFTING, randomCap(MIN_CRAFTING_CAP, MAX_CRAFTING_CAP));
+        caps.put(Skill.Skills.CRAFTING, CRAFTING_CAP);
     }
 
     public int capFor(Skill.Skills skill) {

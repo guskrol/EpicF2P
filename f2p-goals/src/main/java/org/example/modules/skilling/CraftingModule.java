@@ -5,6 +5,7 @@ import com.epicbot.api.shared.APIContext;
 import com.epicbot.api.shared.entity.ItemWidget;
 import com.epicbot.api.shared.entity.WidgetChild;
 import com.epicbot.api.shared.methods.IBankAPI;
+import com.epicbot.api.shared.methods.IGrandExchangeAPI;
 import com.epicbot.api.shared.model.Skill;
 import com.epicbot.api.shared.util.time.Time;
 import org.example.core.ScriptStats;
@@ -28,6 +29,9 @@ public class CraftingModule extends AbstractSkillingModule {
     private static final String THREAD = "Thread";
     private static final String LEATHER = "Leather";
     private static final String COINS = "Coins";
+    private static final int NEEDLE_ID = 1733;
+    private static final int THREAD_ID = 1734;
+    private static final int LEATHER_ID = 1741;
     private static final int INVENTORY_WIDGET_GROUP = 149;
     private static final int SKILLMULTI_GROUP = InterfaceID.SKILLMULTI;
     private static final int SKILLMULTI_ALL_CHILD = childId(InterfaceID.Skillmulti.ALL);
@@ -41,6 +45,7 @@ public class CraftingModule extends AbstractSkillingModule {
     private static final int CRAFTING_FUNDING_BUFFER_COINS = 450;
     private static final long GE_OFFER_CHECK_DELAY_MILLIS = 7_000L;
     private static final long CRAFTING_BATCH_IDLE_TIMEOUT_MILLIS = 14_000L;
+    private static final long CRAFTING_INTERFACE_TRUST_MILLIS = 8_000L;
     private static final String[] CRAFTING_FUNDING_SAFE_SELL_ITEMS = F2PItemRegistry.fundingSellItems();
     private static final String[] CRAFTING_FUNDING_SALE_KEEP_ITEMS = {
             NEEDLE,
@@ -50,12 +55,12 @@ public class CraftingModule extends AbstractSkillingModule {
     };
 
     private static final LeatherProduct[] PRODUCTS = {
-            new LeatherProduct("Leather gloves", 1),
-            new LeatherProduct("Leather boots", 7),
-            new LeatherProduct("Leather cowl", 9),
-            new LeatherProduct("Leather vambraces", 11),
-            new LeatherProduct("Leather body", 14),
-            new LeatherProduct("Leather chaps", 18)
+            new LeatherProduct("Leather gloves", 1, 1059),
+            new LeatherProduct("Leather boots", 7, 1061),
+            new LeatherProduct("Leather cowl", 9, 1167),
+            new LeatherProduct("Leather vambraces", 11, 1063),
+            new LeatherProduct("Leather body", 14, 1129),
+            new LeatherProduct("Leather chaps", 18, 1095)
     };
 
     private LeatherProduct activeProduct;
@@ -67,9 +72,11 @@ public class CraftingModule extends AbstractSkillingModule {
     private int activeBatchCraftingLevel = -1;
     private int lastLeatherCount = -1;
     private long lastLeatherChangeAt;
+    private long lastCraftingInterfaceRequestedAt;
     private long nextCraftingProgressLogAt;
     private long nextInterfaceRecoveryLogAt;
     private String pendingBuyItem;
+    private int pendingBuyItemId;
     private int pendingBuyQuantity;
     private int pendingBuyPrice;
     private long pendingOfferCheckAt;
@@ -234,6 +241,7 @@ public class CraftingModule extends AbstractSkillingModule {
         log("Opening leather Crafting interface for " + product.name()
                 + " with " + leatherBefore + " Leather");
         if (useNeedleOnLeather(ctx)) {
+            lastCraftingInterfaceRequestedAt = System.currentTimeMillis();
             Time.sleep(
                     900,
                     1800,
@@ -297,6 +305,7 @@ public class CraftingModule extends AbstractSkillingModule {
         craftingLevelUpRecoveryPending = false;
         activeBatchCraftingLevel = -1;
         lastLeatherCount = -1;
+        lastCraftingInterfaceRequestedAt = 0L;
         craftLeather(ctx);
         return true;
     }
@@ -332,6 +341,7 @@ public class CraftingModule extends AbstractSkillingModule {
         craftingLevelUpRecoveryPending = false;
         activeBatchCraftingLevel = -1;
         lastLeatherCount = -1;
+        lastCraftingInterfaceRequestedAt = 0L;
         Time.sleep(500, 800);
         return false;
     }
@@ -423,11 +433,13 @@ public class CraftingModule extends AbstractSkillingModule {
         }
 
         pendingBuyItem = itemName;
+        pendingBuyItemId = materialItemId(itemName);
         pendingBuyQuantity = Math.max(1, quantity);
         pendingBuyPrice = unitPrice;
         pendingOfferCheckAt = 0L;
         log("Planning Crafting buy: " + pendingBuyQuantity + "x " + pendingBuyItem
-                + " at " + pendingBuyPrice + " each");
+                + " at " + pendingBuyPrice + " each"
+                + (pendingBuyItemId > 0 ? " id=" + pendingBuyItemId : ""));
         ctx.bank().close();
         Time.sleep(600, 900, () -> !ctx.bank().isOpen(), 100);
     }
@@ -836,6 +848,15 @@ public class CraftingModule extends AbstractSkillingModule {
             return;
         }
 
+        if (geBuySetupHasNoSelectedItem(ctx)) {
+            log("Crafting GE buy has no selected item; resetting offer before retrying " + pendingBuyItem);
+            ctx.grandExchange().backToOverview();
+            pendingOfferCheckAt = 0L;
+            Time.sleep(700, 1100, () -> ctx.grandExchange().getCurrentScreen()
+                    == IGrandExchangeAPI.GrandExchangeScreen.OVERVIEW, 100);
+            return;
+        }
+
         long now = System.currentTimeMillis();
         if (now < pendingOfferCheckAt) {
             log("Waiting for Crafting buy offer: " + pendingBuyItem);
@@ -846,11 +867,16 @@ public class CraftingModule extends AbstractSkillingModule {
         pendingBuyPrice = Math.max(pendingBuyPrice, materialBuyPrice(ctx, pendingBuyItem));
         log("Buying Crafting material: " + pendingBuyQuantity + "x " + pendingBuyItem
                 + " for " + pendingBuyPrice + " each");
-        boolean placed = ctx.grandExchange().placeBuyOffer(pendingBuyItem, pendingBuyQuantity, pendingBuyPrice);
+        boolean placed = placeCraftingBuyOffer(ctx);
         pendingOfferCheckAt = now + GE_OFFER_CHECK_DELAY_MILLIS;
         Time.sleep(5000, 8000);
         if (!placed) {
             log("Crafting buy offer was not placed; retrying " + pendingBuyItem);
+            if (geBuySetupHasNoSelectedItem(ctx)) {
+                ctx.grandExchange().backToOverview();
+                pendingOfferCheckAt = 0L;
+                Time.sleep(700, 1100);
+            }
             return;
         }
 
@@ -858,6 +884,18 @@ public class CraftingModule extends AbstractSkillingModule {
         clearPendingBuy();
         ctx.grandExchange().close();
         Time.sleep(600, 900);
+    }
+
+    private boolean placeCraftingBuyOffer(APIContext ctx) {
+        if (pendingBuyItemId > 0) {
+            return ctx.grandExchange().placeBuyOffer(pendingBuyItemId, pendingBuyQuantity, pendingBuyPrice);
+        }
+        return ctx.grandExchange().placeBuyOffer(pendingBuyItem, pendingBuyQuantity, pendingBuyPrice);
+    }
+
+    private boolean geBuySetupHasNoSelectedItem(APIContext ctx) {
+        return ctx.grandExchange().getCurrentScreen() == IGrandExchangeAPI.GrandExchangeScreen.SETUP_BUY_OFFER
+                && ctx.grandExchange().getOfferItem() <= 0;
     }
 
     private void finishCraftingCap(APIContext ctx) {
@@ -894,6 +932,18 @@ public class CraftingModule extends AbstractSkillingModule {
             return activeProduct;
         }
 
+        if (activeProductLaggedTooFar(activeProduct, highest)) {
+            LeatherProduct caughtUp = previousUnlockedProduct(highest);
+            log("Crafting product catch-up: " + activeProduct.name()
+                    + " is too far behind " + highest.name()
+                    + "; switching to " + caughtUp.name());
+            activeProduct = caughtUp;
+            activeProductBatchesLeft = randomInt(1, 3);
+            pendingUnlockAwarenessProduct = null;
+            pendingUnlockAwarenessBatches = 0;
+            return activeProduct;
+        }
+
         if (highest.level() > activeProduct.level()) {
             updateUnlockAwareness(highest);
             if (pendingUnlockAwarenessBatches > 0) {
@@ -912,13 +962,14 @@ public class CraftingModule extends AbstractSkillingModule {
     }
 
     private void updateUnlockAwareness(LeatherProduct unlockedProduct) {
-        if (pendingUnlockAwarenessProduct == null
-                || !pendingUnlockAwarenessProduct.name().equals(unlockedProduct.name())) {
-            pendingUnlockAwarenessProduct = unlockedProduct;
-            pendingUnlockAwarenessBatches = randomInt(2, 6);
-            log("Crafting unlocked " + unlockedProduct.name()
-                    + "; continuing old product for ~" + pendingUnlockAwarenessBatches + " batches");
+        if (pendingUnlockAwarenessBatches > 0 && pendingUnlockAwarenessProduct != null) {
+            return;
         }
+
+        pendingUnlockAwarenessProduct = unlockedProduct;
+        pendingUnlockAwarenessBatches = randomInt(1, 3);
+        log("Crafting unlocked " + unlockedProduct.name()
+                + "; continuing old product for ~" + pendingUnlockAwarenessBatches + " batches");
     }
 
     private LeatherProduct chooseAwareProduct(int craftingLevel) {
@@ -964,6 +1015,20 @@ public class CraftingModule extends AbstractSkillingModule {
         return null;
     }
 
+    private LeatherProduct previousUnlockedProduct(LeatherProduct highest) {
+        int highestIndex = productIndex(highest);
+        if (highestIndex <= 0) {
+            return highest;
+        }
+        return PRODUCTS[highestIndex - 1];
+    }
+
+    private boolean activeProductLaggedTooFar(LeatherProduct active, LeatherProduct highest) {
+        int activeIndex = productIndex(active);
+        int highestIndex = productIndex(highest);
+        return activeIndex >= 0 && highestIndex >= 0 && highestIndex - activeIndex >= 2;
+    }
+
     private void finishCraftingBatch() {
         if (!craftingBatchActive) {
             return;
@@ -973,6 +1038,7 @@ public class CraftingModule extends AbstractSkillingModule {
         craftingLevelUpRecoveryPending = false;
         activeBatchCraftingLevel = -1;
         lastLeatherCount = -1;
+        lastCraftingInterfaceRequestedAt = 0L;
         activeProductBatchesLeft = Math.max(0, activeProductBatchesLeft - 1);
         if (pendingUnlockAwarenessBatches > 0) {
             pendingUnlockAwarenessBatches--;
@@ -1086,10 +1152,15 @@ public class CraftingModule extends AbstractSkillingModule {
     }
 
     private boolean craftingInterfaceOpen(APIContext ctx, LeatherProduct product) {
-        return findLeatherProductWidget(ctx, product) != null
-                || hasVisibleWidgetText(ctx, "What would you like to make?")
-                || hasVisibleWidgetText(ctx, "How many would you like to make?")
-                || hasVisibleWidgetText(ctx, "Choose a quantity");
+        if (craftingPromptVisible(ctx)) {
+            return true;
+        }
+
+        if (System.currentTimeMillis() - lastCraftingInterfaceRequestedAt > CRAFTING_INTERFACE_TRUST_MILLIS) {
+            return false;
+        }
+
+        return findLeatherProductWidget(ctx, product) != null;
     }
 
     private boolean clickLeatherProduct(APIContext ctx, LeatherProduct product, boolean allowDefaultClick) {
@@ -1128,49 +1199,52 @@ public class CraftingModule extends AbstractSkillingModule {
     private WidgetChild findLeatherProductWidget(APIContext ctx, LeatherProduct product) {
         WidgetChild byItemName = firstLeatherProductWidget(ctx.widgets()
                 .query()
+                .group(SKILLMULTI_GROUP, InterfaceID.CHATBOX)
                 .itemName(product.name())
-                .results());
+                .results(), product);
         if (byItemName != null) {
             return byItemName;
         }
 
         WidgetChild byText = firstLeatherProductWidget(ctx.widgets()
                 .query()
+                .group(SKILLMULTI_GROUP, InterfaceID.CHATBOX)
                 .textContains(product.name())
-                .results());
+                .results(), product);
         if (byText != null) {
             return byText;
-        }
-
-        WidgetChild firstSkillmultiItem = ctx.widgets().get(SKILLMULTI_GROUP, SKILLMULTI_FIRST_ITEM_CHILD);
-        if (isLeatherProductWidget(firstSkillmultiItem)) {
-            return firstSkillmultiItem;
         }
 
         return firstLeatherProductWidget(ctx.widgets()
                 .query()
                 .group(InterfaceID.CHATBOX, SKILLMULTI_GROUP)
-                .results());
+                .results(), product);
     }
 
-    private WidgetChild firstLeatherProductWidget(Iterable<WidgetChild> widgets) {
+    private WidgetChild firstLeatherProductWidget(Iterable<WidgetChild> widgets, LeatherProduct product) {
         for (WidgetChild widget : widgets) {
-            if (isLeatherProductWidget(widget)) {
+            if (isLeatherProductWidget(widget, product)) {
                 return widget;
             }
         }
         return null;
     }
 
-    private boolean isLeatherProductWidget(WidgetChild widget) {
-        if (!isVisibleWidget(widget)) {
+    private boolean isLeatherProductWidget(WidgetChild widget, LeatherProduct product) {
+        if (product == null || !isCraftingInterfaceWidget(widget)) {
             return false;
         }
-        if (widget.getParentId() == INVENTORY_WIDGET_GROUP
-                || (widget.getGroup() != null && widget.getGroup().getIndex() == INVENTORY_WIDGET_GROUP)) {
+
+        String lowerName = product.name().toLowerCase();
+        boolean productMatches = widget.getItemId() == product.itemId()
+                || containsIgnoreCase(widget.getName(), lowerName)
+                || containsIgnoreCase(widget.getText(), lowerName)
+                || containsIgnoreCase(widget.getRawText(), lowerName);
+        if (!productMatches) {
             return false;
         }
-        return widget.getItemId() > 0 || isChatboxProductWidget(widget);
+
+        return isSkillmultiWidget(widget) || isChatboxProductWidget(widget);
     }
 
     private boolean selectCraftingAllQuantity(APIContext ctx) {
@@ -1222,8 +1296,9 @@ public class CraftingModule extends AbstractSkillingModule {
         }
         String text = (widget.getText() + " " + widget.getRawText()).toLowerCase();
         return isSkillmultiWidget(widget)
-                || text.contains("all")
-                || widget.hasAction("All", "Make All", "Make-all", "Craft All", "Craft-all");
+                || isChatboxCraftingWidget(widget) && (
+                text.contains("all")
+                        || widget.hasAction("All", "Make All", "Make-all", "Craft All", "Craft-all"));
     }
 
     private boolean isSkillmultiWidget(WidgetChild widget) {
@@ -1233,17 +1308,51 @@ public class CraftingModule extends AbstractSkillingModule {
     }
 
     private boolean isChatboxProductWidget(WidgetChild widget) {
+        return isChatboxCraftingWidget(widget)
+                && widget.getItemId() > 0
+                && widget.getWidth() >= 25
+                && widget.getHeight() >= 20
+                && widget.getAbsoluteX() >= 0
+                && widget.getAbsoluteX() <= 520;
+    }
+
+    private boolean isCraftingInterfaceWidget(WidgetChild widget) {
+        if (!isVisibleWidget(widget)) {
+            return false;
+        }
+        if (widget.getParentId() == INVENTORY_WIDGET_GROUP
+                || (widget.getGroup() != null && widget.getGroup().getIndex() == INVENTORY_WIDGET_GROUP)) {
+            return false;
+        }
+        return isSkillmultiWidget(widget) || isChatboxCraftingWidget(widget);
+    }
+
+    private boolean isChatboxCraftingWidget(WidgetChild widget) {
         return widget != null
                 && widget.isValid()
                 && widget.getGroup() != null
                 && widget.getGroup().getIndex() == InterfaceID.CHATBOX
-                && widget.getItemId() > 0
-                && widget.getWidth() >= 25
-                && widget.getHeight() >= 20
                 && widget.getAbsoluteY() >= 330
-                && widget.getAbsoluteY() <= 510
-                && widget.getAbsoluteX() >= 0
-                && widget.getAbsoluteX() <= 520;
+                && widget.getAbsoluteY() <= 510;
+    }
+
+    private boolean craftingPromptVisible(APIContext ctx) {
+        for (WidgetChild widget : ctx.widgets()
+                .query()
+                .group(SKILLMULTI_GROUP, InterfaceID.CHATBOX)
+                .results()) {
+            if (!isCraftingInterfaceWidget(widget)) {
+                continue;
+            }
+
+            String text = (widget.getText() + " " + widget.getRawText()).toLowerCase();
+            if (text.contains("what would you like to make")
+                    || text.contains("how many would you like to make")
+                    || text.contains("choose a quantity")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean clickChatboxAllFallback(APIContext ctx) {
@@ -1407,6 +1516,19 @@ public class CraftingModule extends AbstractSkillingModule {
 
     private int materialBuyPrice(APIContext ctx, String itemName) {
         return GePricing.exchangeQuickBuyPrice(ctx, itemName, 0L);
+    }
+
+    private int materialItemId(String itemName) {
+        if (namesMatch(itemName, NEEDLE)) {
+            return NEEDLE_ID;
+        }
+        if (namesMatch(itemName, THREAD)) {
+            return THREAD_ID;
+        }
+        if (namesMatch(itemName, LEATHER)) {
+            return LEATHER_ID;
+        }
+        return 0;
     }
 
     private boolean openBankForCrafting(APIContext ctx, String reason) {
@@ -1659,6 +1781,7 @@ public class CraftingModule extends AbstractSkillingModule {
 
     private void clearPendingBuy() {
         pendingBuyItem = null;
+        pendingBuyItemId = 0;
         pendingBuyQuantity = 0;
         pendingBuyPrice = 0;
         pendingOfferCheckAt = 0L;
@@ -1704,6 +1827,6 @@ public class CraftingModule extends AbstractSkillingModule {
         return packedWidgetId & 0xFFFF;
     }
 
-    private record LeatherProduct(String name, int level) {
+    private record LeatherProduct(String name, int level, int itemId) {
     }
 }
