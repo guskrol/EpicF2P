@@ -3,6 +3,7 @@ package org.example.modules.combat;
 import com.epicbot.api.shared.APIContext;
 import com.epicbot.api.shared.model.Skill;
 import org.example.core.ManagedF2PModule;
+import org.example.core.SkillCapManager;
 
 public class RangedCombatTrainingModule implements ManagedF2PModule {
     private static final int MIN_DEFENCE_LEVEL = 15;
@@ -10,9 +11,11 @@ public class RangedCombatTrainingModule implements ManagedF2PModule {
     private static final int CATCH_UP_PRIORITY_BOOST = 90;
 
     private final LumbridgeCowCombatModule combatModule;
+    private final SkillCapManager caps;
 
-    public RangedCombatTrainingModule(LumbridgeCowCombatModule combatModule) {
+    public RangedCombatTrainingModule(LumbridgeCowCombatModule combatModule, SkillCapManager caps) {
         this.combatModule = combatModule;
+        this.caps = caps;
     }
 
     @Override
@@ -34,8 +37,7 @@ public class RangedCombatTrainingModule implements ManagedF2PModule {
 
     @Override
     public boolean isComplete(APIContext ctx) {
-        return ctx.skills().get(Skill.Skills.RANGED).getRealLevel()
-                >= LumbridgeCowCombatModule.RANGED_TRAINING_CAP;
+        return caps.isComplete(ctx, Skill.Skills.RANGED);
     }
 
     @Override
@@ -51,7 +53,7 @@ public class RangedCombatTrainingModule implements ManagedF2PModule {
     @Override
     public int priority(APIContext ctx) {
         int rangedLevel = ctx.skills().get(Skill.Skills.RANGED).getRealLevel();
-        int remaining = Math.max(0, LumbridgeCowCombatModule.RANGED_TRAINING_CAP - rangedLevel);
+        int remaining = caps.levelsRemaining(ctx, Skill.Skills.RANGED);
         int catchUpTarget = catchUpTarget(ctx);
         if (rangedLevel < catchUpTarget) {
             return CATCH_UP_PRIORITY_BOOST + Math.max(1, catchUpTarget - rangedLevel);
@@ -66,6 +68,6 @@ public class RangedCombatTrainingModule implements ManagedF2PModule {
         }
 
         int target = Math.max(MIN_CATCH_UP_TARGET_LEVEL, defenceLevel + 5);
-        return Math.min(LumbridgeCowCombatModule.RANGED_TRAINING_CAP, target);
+        return Math.min(caps.capFor(Skill.Skills.RANGED), target);
     }
 }

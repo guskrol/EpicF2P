@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 public class LumbridgeCowCombatModule implements F2PModule {
     private static final Area CHICKEN_PEN = new Area(
@@ -71,12 +72,17 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private static final int RESUME_AT_HEALTH_PERCENT = 85;
     private static final int MIN_DEFENCE_FOR_RANGED = 15;
     private static final int MIN_RANGED_ARROWS_EQUIPPED = 50;
-    private static final int MIN_RANGED_ARROW_PURCHASE = 200;
-    public static final int RANGED_TRAINING_CAP = 20;
+    private static final int RANGED_ARROW_STOCK_TARGET = 200;
+    private static final int NEAR_CAP_ARROW_STOCK_TARGET = 100;
+    private static final int FINAL_LEVEL_ARROW_STOCK_TARGET = 50;
+    private static final int MIN_RANGED_ARROW_PURCHASE = 50;
+    private static final Skill.Skills[] MELEE_SKILLS = {
+            Skill.Skills.ATTACK, Skill.Skills.STRENGTH, Skill.Skills.DEFENCE
+    };
     private static final String WC_FUNDING_LOG_NAME = "Logs";
     private static final String STARTER_FOOD_NAME = "Trout";
-    private static final int MIN_FOOD_STOCK_TARGET = 120;
-    private static final int MAX_FOOD_STOCK_TARGET = 180;
+    private static final int MIN_FOOD_STOCK_TARGET = 28;
+    private static final int MAX_FOOD_STOCK_TARGET = 42;
     private static final int LOW_TOTAL_FOOD_THRESHOLD = 8;
     private static final int MIN_COMBAT_FOOD_WITHDRAW = 8;
     private static final int MAX_COMBAT_FOOD_WITHDRAW = 14;
@@ -310,6 +316,8 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private final Consumer<String> logger;
     private final ScriptStats stats;
     private final TrainingMode trainingMode;
+    private final SkillCapManager caps;
+    private final Predicate<APIContext> magicGearPreparation;
     private final FundingPlanner fundingPlanner = new FundingPlanner();
     private final SkillCapManager fundingSkillCaps = new SkillCapManager();
     private final BeerGlassCollectorModule beerGlassFundingModule;
@@ -339,6 +347,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private CombatPhase currentCombatPhase;
     private GearItem pendingGearPurchase;
     private boolean pendingGearPurchaseOptional;
+    private int pendingRangedArrowBankStock = -1;
     private boolean woodcuttingFundingMode;
     private boolean pendingStarterFoodPurchase;
     private int foodStockTarget;
@@ -348,6 +357,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private boolean woodcuttingFundingBankAudited;
     private int woodcuttingFundingBankCoinsSnapshot;
     private int woodcuttingFundingBankLogsSnapshot;
+    private int woodcuttingFundingBankFoodSnapshot;
     private long gearPurchaseDeferredUntil;
     private boolean gearBuyOfferPending;
     private long desiredGearPurchaseRetryAt;
@@ -378,9 +388,22 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     public LumbridgeCowCombatModule(Consumer<String> logger, ScriptStats stats, TrainingMode trainingMode) {
+        this(logger, stats, trainingMode, new SkillCapManager());
+    }
+
+    public LumbridgeCowCombatModule(
+            Consumer<String> logger, ScriptStats stats, TrainingMode trainingMode, SkillCapManager caps) {
+        this(logger, stats, trainingMode, caps, null);
+    }
+
+    public LumbridgeCowCombatModule(
+            Consumer<String> logger, ScriptStats stats, TrainingMode trainingMode,
+            SkillCapManager caps, Predicate<APIContext> magicGearPreparation) {
         this.logger = logger;
         this.stats = stats;
         this.trainingMode = trainingMode == null ? TrainingMode.MELEE : trainingMode;
+        this.caps = caps;
+        this.magicGearPreparation = magicGearPreparation;
         this.foodStockTarget = randomFoodStockTarget();
         this.beerGlassFundingModule = new BeerGlassCollectorModule(logger, stats);
         this.fishingCookingFundingModule = new FishingCookingModule(logger, stats, fundingSkillCaps, false, true);
@@ -389,12 +412,27 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
     @Override
     public String name() {
-        return trainingMode == TrainingMode.RANGED ? "combat.ranged_engine" : "combat.lumbridge_cows";
+        return switch (trainingMode) {
+            case RANGED -> "combat.ranged_engine";
+            case MAGIC -> "combat.magic_engine";
+            case MELEE -> "combat.lumbridge_cows";
+        };
     }
 
     @Override
     public boolean shouldExecute(APIContext ctx) {
-        return true;
+        if (trainingMode == TrainingMode.RANGED) {
+            return !caps.isComplete(ctx, Skill.Skills.RANGED);
+        }
+        if (trainingMode == TrainingMode.MAGIC) {
+            return !caps.isComplete(ctx, Skill.Skills.MAGIC);
+        }
+        for (Skill.Skills skill : MELEE_SKILLS) {
+            if (!caps.isComplete(ctx, skill)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public boolean isProtectedFundingSubphase() {
@@ -410,6 +448,11 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
     @Override
     public void execute(APIContext ctx) {
+        if (!shouldExecute(ctx)) {
+            stats.setStatus("Combat training caps reached");
+            Time.sleep(600, 900);
+            return;
+        }
         logCombatTickEntered();
         stats.startExperienceIfNeeded(ctx);
         updateCombatTracking(ctx);
@@ -544,6 +587,10 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private boolean ensureCombatStyle(APIContext ctx) {
+        if (trainingMode == TrainingMode.MAGIC) {
+            stats.setTrainingSkill("Magic");
+            return false;
+        }
         return trainingMode == TrainingMode.RANGED
                 ? ensureRangedCombatStyle(ctx)
                 : ensureMeleeCombatStyle(ctx);
@@ -567,7 +614,8 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
     private boolean ensureMeleeCombatStyle(APIContext ctx) {
         if (ctx.bank().isOpen()
-                || ctx.localPlayer().isAttacking()
+                || (ctx.localPlayer().isAttacking() && meleePlanSkill != null
+                    && !caps.isComplete(ctx, meleePlanSkill))
                 || ctx.localPlayer().isMoving()
                 || isEquipmentSlotEmpty(ctx, IEquipmentAPI.Slot.WEAPON)) {
             return false;
@@ -587,11 +635,14 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
 
         if (!ctx.combat().hasOption(desiredStyle)) {
-            if (ctx.combat().hasOption(ICombatAPI.AttackStyle.CONTROLLED)) {
+            if (ctx.combat().hasOption(ICombatAPI.AttackStyle.CONTROLLED)
+                    && !caps.isComplete(ctx, Skill.Skills.ATTACK)
+                    && !caps.isComplete(ctx, Skill.Skills.STRENGTH)
+                    && !caps.isComplete(ctx, Skill.Skills.DEFENCE)) {
                 desiredStyle = ICombatAPI.AttackStyle.CONTROLLED;
             } else {
                 log("Combat style unavailable for " + targetSkill.name() + ": " + desiredStyle.name());
-                return false;
+                return true;
             }
         }
 
@@ -603,7 +654,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return true;
         }
 
-        return false;
+        return true;
     }
 
     private boolean ensureRangedCombatStyle(APIContext ctx) {
@@ -619,11 +670,12 @@ public class LumbridgeCowCombatModule implements F2PModule {
         if (!ctx.combat().hasOption(desiredStyle)) {
             if (ctx.combat().hasOption(ICombatAPI.AttackStyle.ACCURATERANGING)) {
                 desiredStyle = ICombatAPI.AttackStyle.ACCURATERANGING;
-            } else if (ctx.combat().hasOption(ICombatAPI.AttackStyle.LONGRANGE)) {
+            } else if (ctx.combat().hasOption(ICombatAPI.AttackStyle.LONGRANGE)
+                    && !caps.isComplete(ctx, Skill.Skills.DEFENCE)) {
                 desiredStyle = ICombatAPI.AttackStyle.LONGRANGE;
             } else {
                 log("Ranged combat style unavailable for current weapon");
-                return false;
+                return true;
             }
         }
 
@@ -638,7 +690,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return true;
         }
 
-        return false;
+        return true;
     }
 
     private Skill.Skills pickMeleeTrainingSkill(APIContext ctx) {
@@ -659,6 +711,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
         if (trainingMode != TrainingMode.MELEE) {
             return false;
+        }
+        if (caps.isComplete(ctx, meleePlanSkill)) {
+            return true;
         }
 
         long now = System.currentTimeMillis();
@@ -683,6 +738,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
         meleePlanSkill = picked;
         currentMeleeTrainingSkill = picked;
+        if (picked == null) {
+            return;
+        }
         meleePlanStartLevel = ctx.skills().get(picked).getRealLevel();
         meleePlanStartXp = ctx.skills().get(picked).getExperience();
         meleePlanTargetLevels = randomInt(MELEE_PLAN_MIN_LEVELS, MELEE_PLAN_MAX_LEVELS);
@@ -702,8 +760,12 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private Skill.Skills pickWeightedMeleeSkill(APIContext ctx, Skill.Skills previous) {
-        Skill.Skills[] options = {Skill.Skills.ATTACK, Skill.Skills.STRENGTH, Skill.Skills.DEFENCE};
-        int lowestLevel = meleeLevel(ctx, lowestMeleeSkill(ctx));
+        Skill.Skills[] options = MELEE_SKILLS;
+        Skill.Skills lowest = lowestMeleeSkill(ctx);
+        if (lowest == null) {
+            return null;
+        }
+        int lowestLevel = meleeLevel(ctx, lowest);
         int highestLevel = highestMeleeLevel(ctx);
         int gap = highestLevel - lowestLevel;
         if (gap >= MELEE_BALANCE_FORCE_GAP) {
@@ -714,6 +776,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
         int total = 0;
         for (int i = 0; i < options.length; i++) {
             Skill.Skills skill = options[i];
+            if (caps.isComplete(ctx, skill)) {
+                continue;
+            }
             int level = meleeLevel(ctx, skill);
             int weight = 30;
             if (level <= lowestLevel) {
@@ -739,29 +804,29 @@ public class LumbridgeCowCombatModule implements F2PModule {
                 return options[i];
             }
         }
-        return options[ThreadLocalRandom.current().nextInt(options.length)];
+        return lowest;
     }
 
     private Skill.Skills lowestMeleeSkill(APIContext ctx) {
-        int attack = ctx.skills().get(Skill.Skills.ATTACK).getRealLevel();
-        int strength = ctx.skills().get(Skill.Skills.STRENGTH).getRealLevel();
-        int defence = ctx.skills().get(Skill.Skills.DEFENCE).getRealLevel();
-
-        if (attack <= strength && attack <= defence) {
-            return Skill.Skills.ATTACK;
+        Skill.Skills lowest = null;
+        for (Skill.Skills skill : MELEE_SKILLS) {
+            if (!caps.isComplete(ctx, skill)
+                    && (lowest == null || meleeLevel(ctx, skill) < meleeLevel(ctx, lowest))) {
+                lowest = skill;
+            }
         }
-        if (strength <= attack && strength <= defence) {
-            return Skill.Skills.STRENGTH;
-        }
-        return Skill.Skills.DEFENCE;
+        return lowest;
     }
 
     private Skill.Skills randomLowestMeleeSkill(APIContext ctx) {
-        Skill.Skills[] options = {Skill.Skills.ATTACK, Skill.Skills.STRENGTH, Skill.Skills.DEFENCE};
-        int lowestLevel = meleeLevel(ctx, lowestMeleeSkill(ctx));
+        Skill.Skills lowest = lowestMeleeSkill(ctx);
+        if (lowest == null) {
+            return null;
+        }
+        int lowestLevel = meleeLevel(ctx, lowest);
         List<Skill.Skills> tied = new ArrayList<>();
-        for (Skill.Skills skill : options) {
-            if (meleeLevel(ctx, skill) == lowestLevel) {
+        for (Skill.Skills skill : MELEE_SKILLS) {
+            if (!caps.isComplete(ctx, skill) && meleeLevel(ctx, skill) == lowestLevel) {
                 tied.add(skill);
             }
         }
@@ -1057,6 +1122,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private int combatTargetLevel(APIContext ctx) {
+        if (trainingMode == TrainingMode.MAGIC) {
+            return ctx.skills().get(Skill.Skills.MAGIC).getRealLevel();
+        }
         if (trainingMode == TrainingMode.RANGED) {
             return ctx.skills().get(Skill.Skills.RANGED).getRealLevel();
         }
@@ -1167,7 +1235,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private void rememberAttackAttempt(NPC target) {
         pendingAttackTargetName = target.getName();
         pendingAttackTargetTile = target.getLocation();
-        long lockMillis = trainingMode == TrainingMode.RANGED
+        long lockMillis = trainingMode != TrainingMode.MELEE
                 ? RANGED_ATTACK_CLICK_LOCK_MILLIS
                 : MELEE_ATTACK_CLICK_LOCK_MILLIS;
         pendingAttackUntil = System.currentTimeMillis() + lockMillis;
@@ -1310,6 +1378,10 @@ public class LumbridgeCowCombatModule implements F2PModule {
         int strength = ctx.skills().get(Skill.Skills.STRENGTH).getRealLevel();
         int defence = ctx.skills().get(Skill.Skills.DEFENCE).getRealLevel();
         int lowestMelee = Math.min(attack, Math.min(strength, defence));
+        if (trainingMode == TrainingMode.MAGIC) {
+            int magic = ctx.skills().get(Skill.Skills.MAGIC).getRealLevel();
+            return hitpoints < 12 || defence < MIN_DEFENCE_FOR_RANGED || magic < 5;
+        }
         if (trainingMode == TrainingMode.RANGED) {
             int ranged = ctx.skills().get(Skill.Skills.RANGED).getRealLevel();
             return hitpoints < 12 || defence < MIN_DEFENCE_FOR_RANGED || ranged < 5;
@@ -1397,6 +1469,14 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
         if (woodcuttingFundingMode) {
             return handleWoodcuttingFunding(ctx);
+        }
+
+        if (isRangedArrow(pendingGearPurchase.name)
+                && pendingRangedArrowBankStock < 0 && !isBankOpen(ctx)) {
+            if (closeGrandExchangeBeforeGearBanking(ctx)) {
+                return true;
+            }
+            return openBankOrWalk(ctx, "checking arrow stock before buying");
         }
 
         if (isPendingGearPurchaseSatisfied(ctx)) {
@@ -1721,7 +1801,8 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return false;
         }
         if (isRangedArrow(pendingGearPurchase.name)) {
-            return totalHeldCount(ctx, pendingGearPurchase.name) >= MIN_RANGED_ARROWS_EQUIPPED;
+            return targetRangedArrowQuantity(ctx) == 0
+                    || knownPendingArrowCount(ctx) >= MIN_RANGED_ARROWS_EQUIPPED;
         }
         return ctx.equipment().contains(pendingGearPurchase.name)
                 || ctx.inventory().contains(pendingGearPurchase.name)
@@ -1733,9 +1814,20 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return 1;
         }
 
-        int held = totalHeldCount(ctx, pendingGearPurchase.name);
-        int target = targetRangedArrowQuantity(pendingGearPurchase);
-        return Math.max(1, target - held);
+        int target = targetRangedArrowQuantity(ctx);
+        int held = knownPendingArrowCount(ctx);
+        if (target == 0 || held >= MIN_RANGED_ARROWS_EQUIPPED) {
+            return 0;
+        }
+        return Math.max(MIN_RANGED_ARROW_PURCHASE, target - held);
+    }
+
+    private int knownPendingArrowCount(APIContext ctx) {
+        if (isBankOpen(ctx)) {
+            pendingRangedArrowBankStock = ctx.bank().getCount(pendingGearPurchase.name);
+        }
+        return carriedOrEquippedCount(ctx, pendingGearPurchase.name)
+                + Math.max(0, pendingRangedArrowBankStock);
     }
 
     private boolean handleStarterFoodPurchase(APIContext ctx) {
@@ -1773,6 +1865,10 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
 
         int missingFood = foodToBuyForStock(ctx);
+        if (missingFood == 0) {
+            pendingStarterFoodPurchase = false;
+            return false;
+        }
         int buyPrice = buyPriceForFood(ctx, STARTER_FOOD_NAME);
         int totalCost = foodPurchaseBudget(ctx);
         int inventoryCoins = ctx.inventory().getCount(true, "Coins");
@@ -2005,14 +2101,13 @@ public class LumbridgeCowCombatModule implements F2PModule {
         woodcuttingFundingMode = true;
         pendingStarterFoodPurchase = shouldFundStarterFood(ctx);
         woodcuttingFundingGearName = fundingTargetName();
-        woodcuttingFundingTargetCoins = Math.max(
-                gearBuyPrice + starterFoodBudget(ctx),
-                gearBuyPrice + fundingPlanner.randomBufferCoins(STARTER_FOOD_BUFFER_COINS)
-        );
+        int gearBudget = pendingGearPurchase == null ? gearBuyPrice : pendingGearPurchaseBudget(ctx);
+        woodcuttingFundingTargetCoins = fundingTargetCoins(ctx, gearBudget);
         woodcuttingFundingChopFailures = 0;
         woodcuttingFundingBankAudited = false;
         woodcuttingFundingBankCoinsSnapshot = 0;
         woodcuttingFundingBankLogsSnapshot = 0;
+        woodcuttingFundingBankFoodSnapshot = 0;
         activeFundingDecision = null;
         gearPurchaseDeferredUntil = 0;
 
@@ -2030,7 +2125,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
         if (isBankOpen(ctx)) {
             totalFood += bankFoodCount(ctx);
         }
-        return pendingStarterFoodPurchase || totalFood <= LOW_TOTAL_FOOD_THRESHOLD;
+        return totalFood == 0;
     }
 
     private boolean handleWoodcuttingFunding(APIContext ctx) {
@@ -2046,10 +2141,11 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
         int targetCoins = woodcuttingFundingTargetCoins > 0
                 ? woodcuttingFundingTargetCoins
-                : (pendingGearPurchase == null ? 0 : buyPriceFor(ctx, pendingGearPurchase.name)) + starterFoodBudget(ctx);
+                : fundingTargetCoins(ctx, pendingGearPurchaseBudget(ctx));
         if (!ensureWoodcuttingFundingBankAudited(ctx, targetCoins)) {
             return true;
         }
+        targetCoins = woodcuttingFundingTargetCoins;
 
         updateCombatFundingProgress(ctx, targetCoins);
         boolean geRestrictionActive = isGeRestrictionRetryActive();
@@ -2194,6 +2290,8 @@ public class LumbridgeCowCombatModule implements F2PModule {
         woodcuttingFundingBankAudited = false;
         woodcuttingFundingBankCoinsSnapshot = 0;
         woodcuttingFundingBankLogsSnapshot = 0;
+        woodcuttingFundingBankFoodSnapshot = 0;
+        pendingRangedArrowBankStock = -1;
         activeFundingDecision = null;
         if (isGeRestrictionRetryActive()) {
             gearPurchaseDeferredUntil = Math.max(gearPurchaseDeferredUntil, geRestrictionRetryAt);
@@ -2208,18 +2306,29 @@ public class LumbridgeCowCombatModule implements F2PModule {
         return System.currentTimeMillis() < geRestrictionRetryAt;
     }
 
-    private int starterFoodBudget(APIContext ctx) {
-        return Math.max(STARTER_FOOD_BUFFER_COINS, foodPurchaseBudget(ctx));
+    private int fundingTargetCoins(APIContext ctx, int gearBudget) {
+        int foodBudget = pendingStarterFoodPurchase ? foodPurchaseBudget(ctx) : 0;
+        long target = (long) Math.max(0, gearBudget) + foodBudget + STARTER_FOOD_BUFFER_COINS;
+        return (int) Math.min(Integer.MAX_VALUE, target);
+    }
+
+    private int pendingGearPurchaseBudget(APIContext ctx) {
+        if (pendingGearPurchase == null || isPendingGearPurchaseSatisfied(ctx)) {
+            return 0;
+        }
+        long budget = (long) pendingPurchaseQuantity(ctx) * buyPriceFor(ctx, pendingGearPurchase.name);
+        return (int) Math.min(Integer.MAX_VALUE, budget);
     }
 
     private int foodPurchaseBudget(APIContext ctx) {
         long budget = (long) foodToBuyForStock(ctx) * buyPriceForFood(ctx, STARTER_FOOD_NAME);
-        return (int) Math.min(Integer.MAX_VALUE, Math.max(1L, budget));
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, budget));
     }
 
     private int foodToBuyForStock(APIContext ctx) {
-        int bankFood = isBankOpen(ctx) ? bankFoodCount(ctx) : 0;
-        return Math.max(1, foodStockTarget - bankFood);
+        int bankFood = isBankOpen(ctx) ? bankFoodCount(ctx)
+                : (woodcuttingFundingBankAudited ? woodcuttingFundingBankFoodSnapshot : 0);
+        return Math.max(0, foodStockTarget - inventoryFoodCount(ctx) - bankFood);
     }
 
     private int affordableFoodAmount(int coins, int buyPrice) {
@@ -2368,7 +2477,17 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
         woodcuttingFundingBankCoinsSnapshot = ctx.bank().getCount("Coins");
         woodcuttingFundingBankLogsSnapshot = ctx.bank().getCount(WC_FUNDING_LOG_NAME);
+        woodcuttingFundingBankFoodSnapshot = bankFoodCount(ctx);
         woodcuttingFundingBankAudited = true;
+        pendingStarterFoodPurchase = shouldFundStarterFood(ctx);
+        int gearBudget = pendingGearPurchaseBudget(ctx);
+        woodcuttingFundingTargetCoins = fundingTargetCoins(ctx, gearBudget);
+        targetCoins = woodcuttingFundingTargetCoins;
+        if (gearBudget == 0 && !pendingStarterFoodPurchase) {
+            log("Combat supplies already available in bank; skipping funding");
+            clearFundingState();
+            return false;
+        }
         int totalCoins = ctx.inventory().getCount(true, "Coins") + woodcuttingFundingBankCoinsSnapshot;
         log("Funding coin audit: inv=" + ctx.inventory().getCount(true, "Coins")
                 + " bank=" + woodcuttingFundingBankCoinsSnapshot
@@ -3331,6 +3450,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private List<String> obsoleteGearSaleItemNames(APIContext ctx) {
+        if (trainingMode == TrainingMode.MAGIC) {
+            return List.of();
+        }
         List<String> names = new ArrayList<>();
 
         int attackLevel = ctx.skills().get(Skill.Skills.ATTACK).getRealLevel();
@@ -3415,6 +3537,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private boolean prepareCombatGear(APIContext ctx) {
+        if (trainingMode == TrainingMode.MAGIC) {
+            return magicGearPreparation == null || magicGearPreparation.test(ctx);
+        }
         return trainingMode == TrainingMode.RANGED ? prepareBestRangedGear(ctx) : prepareBestMeleeGear(ctx);
     }
 
@@ -3594,7 +3719,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
                     ctx,
                     "fallback arrows",
                     desiredArrow.name,
-                    targetRangedArrowQuantity(desiredArrow)
+                    targetRangedArrowQuantity(ctx)
             );
         }
 
@@ -3654,6 +3779,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
             GearItem desiredArrow = desiredRangedArrow(rangedLevel);
             if (desiredArrow != null && totalHeldCount(ctx, desiredArrow.name) < MIN_RANGED_ARROWS_EQUIPPED) {
                 setPendingGearPurchase(desiredArrow, false);
+                if (isBankOpen(ctx)) {
+                    pendingRangedArrowBankStock = ctx.bank().getCount(desiredArrow.name);
+                }
                 log("Planned ranged arrow purchase: " + desiredArrow.name);
                 return;
             }
@@ -3774,6 +3902,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private void setPendingGearPurchase(GearItem item, boolean optional) {
         pendingGearPurchase = item;
         pendingGearPurchaseOptional = optional;
+        pendingRangedArrowBankStock = -1;
         gearPurchaseDeferredUntil = 0;
         gearBuyOfferPending = false;
     }
@@ -3781,6 +3910,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private void clearPendingGearPurchase() {
         pendingGearPurchase = null;
         pendingGearPurchaseOptional = false;
+        pendingRangedArrowBankStock = -1;
         gearBuyOfferPending = false;
         pendingStarterFoodPurchase = false;
         woodcuttingFundingBankAudited = false;
@@ -3856,25 +3986,21 @@ public class LumbridgeCowCombatModule implements F2PModule {
         return Math.min(ranged, defence);
     }
 
-    private int targetRangedArrowQuantity(GearItem arrows) {
-        if (arrows == null) {
-            return MIN_RANGED_ARROW_PURCHASE;
+    private int targetRangedArrowQuantity(APIContext ctx) {
+        int cap = caps.capFor(Skill.Skills.RANGED);
+        Skill ranged = ctx.skills().get(Skill.Skills.RANGED);
+        int targetXp = Skill.getExpAtLevel(cap);
+        int remainingXp = Math.max(0, targetXp - ranged.getExperience());
+        if (ranged.getRealLevel() >= cap || remainingXp == 0) {
+            return 0;
         }
-
-        String normalized = normalizedName(arrows.name);
-        if (normalized.contains("bronze")) {
-            return 200;
+        if (remainingXp <= targetXp - Skill.getExpAtLevel(cap - 1)) {
+            return FINAL_LEVEL_ARROW_STOCK_TARGET;
         }
-        if (normalized.contains("iron")) {
-            return 1000;
+        if (remainingXp <= targetXp - Skill.getExpAtLevel(cap - 2)) {
+            return NEAR_CAP_ARROW_STOCK_TARGET;
         }
-        if (normalized.contains("steel")) {
-            return 1000;
-        }
-        if (normalized.contains("mithril")) {
-            return 1000;
-        }
-        return MIN_RANGED_ARROW_PURCHASE;
+        return RANGED_ARROW_STOCK_TARGET;
     }
 
     private int withdrawBestArrows(APIContext ctx, int rangedLevel) {
@@ -3889,7 +4015,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return 0;
         }
 
-        int needed = Math.max(1, targetRangedArrowQuantity(arrows) - held);
+        int needed = Math.max(1, targetRangedArrowQuantity(ctx) - held);
         return withdrawFirstAvailableStack(ctx, "arrows", arrows.name, needed);
     }
 
@@ -3965,6 +4091,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private boolean equipBestInventoryGear(APIContext ctx) {
+        if (trainingMode == TrainingMode.MAGIC) {
+            return false;
+        }
         if (trainingMode == TrainingMode.RANGED) {
             return equipBestInventoryRangedGear(ctx);
         }
@@ -4697,7 +4826,8 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
     public enum TrainingMode {
         MELEE,
-        RANGED
+        RANGED,
+        MAGIC
     }
 
     private static final class GearItem {

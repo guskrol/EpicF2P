@@ -12,6 +12,7 @@ import org.example.core.ModuleTask;
 import org.example.core.ScriptStats;
 import org.example.core.SkillCapManager;
 import org.example.core.runtime.AntibanController;
+import org.example.core.runtime.AccountSkillCapController;
 import org.example.core.runtime.AlKharidGateDialogueController;
 import org.example.core.runtime.BreakController;
 import org.example.core.runtime.CameraZoomController;
@@ -23,7 +24,7 @@ import org.example.modules.GoalManagerModule;
 import org.example.modules.combat.CombatTrainingModule;
 import org.example.modules.combat.LumbridgeCowCombatModule;
 import org.example.modules.combat.RangedCombatTrainingModule;
-import org.example.modules.magic.MagicSplashingModule;
+import org.example.modules.magic.MagicCombatTrainingModule;
 import org.example.modules.moneymaking.BeerGlassCollectorModule;
 import org.example.modules.questing.CookAssistantQuestModule;
 import org.example.modules.questing.RuneMysteriesQuestModule;
@@ -39,7 +40,7 @@ import java.util.List;
 
 @ScriptManifest(name = "F2P Goals", gameType = GameType.OS)
 public class F2PGoalsScript extends Script {
-    private static final String SCRIPT_VERSION = "v0.4.262-hobgoblin-gate-route";
+    private static final String SCRIPT_VERSION = "v0.4.267-crafting-funding-bank-fix";
     private static final boolean QUEST_TEST_ONLY = false;
     private static final boolean RANGED_TEST_ONLY = false;
     private static final boolean MAGIC_TEST_ONLY = false;
@@ -77,9 +78,10 @@ public class F2PGoalsScript extends Script {
                 this::logInfo,
                 stats
         );
-        MagicSplashingModule magicModule = new MagicSplashingModule(
+        MagicCombatTrainingModule magicModule = new MagicCombatTrainingModule(
                 this::logInfo,
-                stats
+                stats,
+                skillCaps
         );
         CookAssistantQuestModule cookAssistantQuestModule = new CookAssistantQuestModule(
                 this::logInfo,
@@ -95,9 +97,10 @@ public class F2PGoalsScript extends Script {
             LumbridgeCowCombatModule rangedCombatModule = new LumbridgeCowCombatModule(
                     this::logInfo,
                     stats,
-                    LumbridgeCowCombatModule.TrainingMode.RANGED
+                    LumbridgeCowCombatModule.TrainingMode.RANGED,
+                    skillCaps
             );
-            managedModules = List.of(new RangedCombatTrainingModule(rangedCombatModule));
+            managedModules = List.of(new RangedCombatTrainingModule(rangedCombatModule, skillCaps));
             fallbackModule = rangedCombatModule;
         } else if (MAGIC_TEST_ONLY) {
             managedModules = List.of(magicModule);
@@ -115,15 +118,17 @@ public class F2PGoalsScript extends Script {
             managedModules = List.of(craftingModule);
             fallbackModule = craftingModule;
         } else {
-            LumbridgeCowCombatModule combatModule = new LumbridgeCowCombatModule(this::logInfo, stats);
+            LumbridgeCowCombatModule combatModule = new LumbridgeCowCombatModule(
+                    this::logInfo, stats, LumbridgeCowCombatModule.TrainingMode.MELEE, skillCaps);
             LumbridgeCowCombatModule rangedCombatModule = new LumbridgeCowCombatModule(
                     this::logInfo,
                     stats,
-                    LumbridgeCowCombatModule.TrainingMode.RANGED
+                    LumbridgeCowCombatModule.TrainingMode.RANGED,
+                    skillCaps
             );
             managedModules = List.of(
                     new CombatTrainingModule(combatModule, skillCaps),
-                    new RangedCombatTrainingModule(rangedCombatModule),
+                    new RangedCombatTrainingModule(rangedCombatModule, skillCaps),
                     magicModule,
                     new WoodcuttingFiremakingModule(this::logInfo, stats, skillCaps),
                     fishingCookingModule,
@@ -142,7 +147,7 @@ public class F2PGoalsScript extends Script {
             logInfo("Test mode enabled: Ranged combat only");
         }
         if (MAGIC_TEST_ONLY) {
-            logInfo("Test mode enabled: Magic Wind Strike to 13, Fire Strike to 19, then Curse splashing");
+            logInfo("Test mode enabled: Magic combat with mob progression and account cap 22-25");
         }
         if (BEER_GLASS_TEST_ONLY) {
             logInfo("Test mode enabled: Beer glass collector only");
@@ -157,7 +162,6 @@ public class F2PGoalsScript extends Script {
         if (CRAFTING_TEST_ONLY) {
             logInfo("Test mode enabled: Crafting only");
         }
-        logInfo(skillCaps.describeCaps());
         GoalManagerModule goalManagerModule = new GoalManagerModule(
                 this::logInfo,
                 stats,
@@ -167,12 +171,14 @@ public class F2PGoalsScript extends Script {
         boolean lightweightTestMode = QUEST_TEST_ONLY || CRAFTING_TEST_ONLY;
         List<RuntimeController> runtimeModules = lightweightTestMode
                 ? List.of(
+                        new AccountSkillCapController(skillCaps, stats, this::logInfo),
                         new DeathRecoveryController(this::logInfo, stats),
                         new AlKharidGateDialogueController(this::logInfo, stats),
                         new LoopWatchdogController(this::logInfo, stats, SCRIPT_VERSION, goalManagerModule::requestReroll),
                         new CameraZoomController(this::logInfo)
                 )
                 : List.of(
+                        new AccountSkillCapController(skillCaps, stats, this::logInfo),
                         new DeathRecoveryController(this::logInfo, stats),
                         new AlKharidGateDialogueController(this::logInfo, stats),
                         new LoopWatchdogController(this::logInfo, stats, SCRIPT_VERSION, goalManagerModule::requestReroll),

@@ -46,6 +46,7 @@ public class CraftingModule extends AbstractSkillingModule {
     private static final long GE_OFFER_CHECK_DELAY_MILLIS = 7_000L;
     private static final long CRAFTING_BATCH_IDLE_TIMEOUT_MILLIS = 14_000L;
     private static final long CRAFTING_INTERFACE_TRUST_MILLIS = 8_000L;
+    private static final long CRAFTING_FUNDING_STALL_TIMEOUT_MILLIS = 5 * 60_000L;
     private static final String[] CRAFTING_FUNDING_SAFE_SELL_ITEMS = F2PItemRegistry.fundingSellItems();
     private static final String[] CRAFTING_FUNDING_SALE_KEEP_ITEMS = {
             NEEDLE,
@@ -93,6 +94,9 @@ public class CraftingModule extends AbstractSkillingModule {
     private FundingPlanner.Decision activeFundingDecision;
     private String activeFundingTargetItem;
     private int activeFundingTargetCoins;
+    private String lastFundingProgressSignature;
+    private long lastFundingProgressAt;
+    private int highestFundingCoins;
 
     public CraftingModule(Consumer<String> logger, ScriptStats stats, SkillCapManager caps) {
         super(logger, stats, caps);
@@ -123,7 +127,11 @@ public class CraftingModule extends AbstractSkillingModule {
 
     @Override
     public boolean isProtectedSubphase(APIContext ctx) {
-        return activeFundingDecision != null || pendingFundingSellItem != null;
+        if (activeFundingDecision == null && pendingFundingSellItem == null) {
+            return false;
+        }
+        trackCraftingFundingProgress(ctx);
+        return System.currentTimeMillis() - lastFundingProgressAt < CRAFTING_FUNDING_STALL_TIMEOUT_MILLIS;
     }
 
     @Override
@@ -535,6 +543,9 @@ public class CraftingModule extends AbstractSkillingModule {
     }
 
     private boolean handleCraftingFundingPool(APIContext ctx) {
+        if (activeFundingDecision != null || pendingFundingSellItem != null) {
+            trackCraftingFundingProgress(ctx);
+        }
         if (pendingFundingSellItem != null) {
             updateCraftingFundingProgress(ctx);
             handlePendingFundingSale(ctx);
@@ -570,8 +581,8 @@ public class CraftingModule extends AbstractSkillingModule {
                 return true;
             }
 
-            activeFundingDecision = decision;
-            closeBank(ctx);
+            // Let the current money maker finish bank setup when there is no stock to sell.
+            executeCraftingFundingMoneyMaker(ctx, activeFundingDecision);
             return true;
         }
 
@@ -629,15 +640,14 @@ public class CraftingModule extends AbstractSkillingModule {
             if (item == null || item.getName() == null || item.getName().isBlank()) {
                 continue;
             }
-            if (namesMatch(item.getName(), COINS)
-                    || namesMatch(item.getName(), NEEDLE)
-                    || namesMatch(item.getName(), THREAD)
-                    || namesMatch(item.getName(), LEATHER)) {
+            if (namesMatch(item.getName(), COINS)) {
                 continue;
             }
-            if (isSafeCraftingFundingItem(item.getName())) {
-                return true;
+            if (method == FundingPlanner.Method.MINING_SMITHING
+                    && normalizedName(item.getName()).endsWith("pickaxe")) {
+                continue;
             }
+            return true;
         }
         return false;
     }
@@ -1590,6 +1600,25 @@ public class CraftingModule extends AbstractSkillingModule {
         return coins;
     }
 
+    private void trackCraftingFundingProgress(APIContext ctx) {
+        highestFundingCoins = Math.max(highestFundingCoins, knownCraftingFundingCoins(ctx));
+        List<String> inventory = new ArrayList<>();
+        for (ItemWidget item : ctx.inventory().getItems()) {
+            if (item != null && item.getName() != null && !item.getName().isBlank()) {
+                inventory.add(item.getName() + ":" + item.getId() + ":" + item.getStackSize());
+            }
+        }
+        inventory.sort(String::compareTo);
+        String signature = inventory + "|" + highestFundingCoins
+                + "|" + ctx.skills().get(Skill.Skills.MINING).getExperience()
+                + "|" + ctx.skills().get(Skill.Skills.SMITHING).getExperience()
+                + "|" + stats.progressScore();
+        if (!signature.equals(lastFundingProgressSignature)) {
+            lastFundingProgressSignature = signature;
+            lastFundingProgressAt = System.currentTimeMillis();
+        }
+    }
+
     private void updateCraftingFundingProgress(APIContext ctx) {
         if (activeFundingTargetCoins <= 0) {
             return;
@@ -1799,6 +1828,9 @@ public class CraftingModule extends AbstractSkillingModule {
         activeFundingDecision = null;
         activeFundingTargetItem = null;
         activeFundingTargetCoins = 0;
+        lastFundingProgressSignature = null;
+        lastFundingProgressAt = 0L;
+        highestFundingCoins = 0;
         clearPendingFundingSale();
         stats.clearFundingReason();
     }

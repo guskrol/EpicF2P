@@ -1,1 +1,23 @@
+tasks.register('combatRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.F2PCombatRegressionTest'
+}
 
+tasks.register('deathRecoveryRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.DeathRecoveryRegressionTest'
+}
+
+tasks.register('craftingFundingRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.CraftingFundingRegressionTest'
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('combatRegressionTest')
+    dependsOn tasks.named('deathRecoveryRegressionTest')
+    dependsOn tasks.named('craftingFundingRegressionTest')
+}
