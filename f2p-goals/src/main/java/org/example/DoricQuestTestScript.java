@@ -2,7 +2,7 @@ package org.example;
 
 import com.epicbot.api.shared.APIContext;
 import com.epicbot.api.shared.GameType;
-import com.epicbot.api.shared.script.Script;
+import org.example.core.AccessAwareScript;
 import com.epicbot.api.shared.script.ScriptManifest;
 import com.epicbot.api.shared.util.paint.PaintContext;
 import org.example.core.F2PModule;
@@ -10,6 +10,7 @@ import org.example.core.ManagedF2PModule;
 import org.example.core.ModuleTask;
 import org.example.core.ScriptStats;
 import org.example.core.runtime.CameraZoomController;
+import org.example.core.runtime.DeathRecoveryController;
 import org.example.core.runtime.LoopWatchdogController;
 import org.example.core.runtime.RuntimeController;
 import org.example.modules.GoalManagerModule;
@@ -20,8 +21,8 @@ import java.awt.Rectangle;
 import java.util.List;
 
 @ScriptManifest(name = "F2P Doric Test", gameType = GameType.OS)
-public class DoricQuestTestScript extends Script {
-    private static final String SCRIPT_VERSION = "v0.4.198-doric-direct-talk";
+public class DoricQuestTestScript extends AccessAwareScript {
+    private static final String SCRIPT_VERSION = "v0.4.400-dialogue-liveness";
 
     private ScriptStats stats;
 
@@ -32,6 +33,7 @@ public class DoricQuestTestScript extends Script {
         List<ManagedF2PModule> managedModules = List.of(doricQuestModule);
         F2PModule fallbackModule = doricQuestModule;
         List<RuntimeController> runtimeModules = List.of(
+                new DeathRecoveryController(this::logInfo, stats),
                 new LoopWatchdogController(this::logInfo, stats, SCRIPT_VERSION),
                 new CameraZoomController(this::logInfo)
         );

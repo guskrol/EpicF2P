@@ -13,10 +13,15 @@ public final class ViewRecovery {
     private static final boolean ZOOM_OUT_SCROLL_DIRECTION = false;
     private static final int MIN_ZOOM_OUT_SCROLLS = 6;
     private static final int MAX_ZOOM_OUT_SCROLLS = 11;
-    private static final int MIN_PITCH = 340;
-    private static final int MAX_PITCH = 384;
+    private static final int MIN_PITCH = 60;
+    private static final int MAX_PITCH = 80;
 
     private ViewRecovery() {
+    }
+
+    public static void faceWalkingDirection(APIContext ctx, Locatable focus, Consumer<String> logger) {
+        if (ctx == null || focus == null || ctx.camera() == null) return;
+        CameraMovement.focus(ctx, focus, logger);
     }
 
     public static void recover(APIContext ctx, String targetLabel, Consumer<String> logger) {
@@ -30,7 +35,7 @@ public final class ViewRecovery {
 
         log(logger, "Adjusting camera/zoom to search for " + safeLabel(targetLabel));
         clearInteractionState(ctx);
-        turnCamera(ctx, focus);
+        if (!turnCamera(ctx, focus, logger)) return;
         moveMouseToViewport(ctx);
         zoomOut(ctx);
         Time.sleep(700, 1200);
@@ -51,24 +56,11 @@ public final class ViewRecovery {
         }
     }
 
-    private static void turnCamera(APIContext ctx, Locatable focus) {
-        try {
-            if (focus != null && ThreadLocalRandom.current().nextInt(100) < 45) {
-                ctx.camera().turnTo(focus);
-                Time.sleep(250, 450);
-            }
-        } catch (RuntimeException ignored) {
-            // Fallback to yaw/pitch below.
-        }
-
-        try {
-            int yaw = (ctx.camera().getYawDeg() + ThreadLocalRandom.current().nextInt(75, 181)) % 360;
-            int pitch = ThreadLocalRandom.current().nextInt(MIN_PITCH, MAX_PITCH + 1);
-            ctx.camera().setYawDeg(yaw);
-            ctx.camera().setPitch(pitch, true);
-        } catch (RuntimeException ignored) {
-            // Some client states temporarily reject camera commands.
-        }
+    private static boolean turnCamera(APIContext ctx, Locatable focus, Consumer<String> logger) {
+        if (focus != null) return CameraMovement.focus(ctx, focus, logger);
+        int yaw = (ctx.camera().getYawDeg() + ThreadLocalRandom.current().nextInt(75, 181)) % 360;
+        int pitch = ThreadLocalRandom.current().nextInt(MIN_PITCH, MAX_PITCH + 1);
+        return CameraMovement.turn(ctx, yaw, pitch, logger);
     }
 
     private static void moveMouseToViewport(APIContext ctx) {

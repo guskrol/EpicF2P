@@ -33,12 +33,7 @@ public class AntibanController implements RuntimeController {
     public void execute(APIContext ctx) {
         int action = ThreadLocalRandom.current().nextInt(100);
 
-        if (action < 35) {
-            logger.accept("[Antiban] Adjusting camera");
-            ctx.camera().setYawDeg(randomInt(0, 360));
-            ctx.camera().setPitch(randomInt(260, 380));
-            Time.sleep(500, 1100);
-        } else if (action < 60) {
+        if (action < 60) {
             logger.accept("[Antiban] Moving mouse randomly");
             ctx.mouse().moveRandomly(randomInt(120, 420), randomInt(220, 760));
             Time.sleep(250, 650);

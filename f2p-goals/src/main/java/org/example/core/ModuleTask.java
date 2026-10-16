@@ -5,8 +5,12 @@ import com.epicbot.api.shared.entity.WidgetChild;
 import com.epicbot.api.shared.script.task.ScriptTask;
 import com.epicbot.api.shared.util.time.Time;
 import org.example.core.runtime.RuntimeController;
+import org.example.core.runtime.ScheduledBreakController;
+import org.example.core.navigation.Navigation;
+import java.util.concurrent.CancellationException;
 
 import java.awt.Point;
+import java.awt.event.KeyEvent;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -18,22 +22,28 @@ public class ModuleTask implements ScriptTask {
     private final Consumer<String> logger;
     private final List<RuntimeController> runtimeControllers;
     private final List<F2PModule> modules;
+    private final ScheduledBreakController scheduledBreaks;
     private long nextLoginWaitLogAt;
+    private long nextMapRecoveryLogAt;
+    private int mapRecoveryAttempts;
 
     public ModuleTask(Supplier<APIContext> contextSupplier, Consumer<String> logger, List<F2PModule> modules) {
-        this(contextSupplier, logger, List.of(), modules);
+        this(contextSupplier, logger, List.of(), modules, null);
     }
 
-    public ModuleTask(
-            Supplier<APIContext> contextSupplier,
-            Consumer<String> logger,
-            List<RuntimeController> runtimeControllers,
-            List<F2PModule> modules
-    ) {
+    public ModuleTask(Supplier<APIContext> contextSupplier, Consumer<String> logger,
+                      List<RuntimeController> runtimeControllers, List<F2PModule> modules) {
+        this(contextSupplier, logger, runtimeControllers, modules, null);
+    }
+
+    public ModuleTask(Supplier<APIContext> contextSupplier, Consumer<String> logger,
+                      List<RuntimeController> runtimeControllers, List<F2PModule> modules,
+                      ScheduledBreakController scheduledBreaks) {
         this.contextSupplier = contextSupplier;
         this.logger = logger;
         this.runtimeControllers = runtimeControllers;
         this.modules = modules;
+        this.scheduledBreaks = scheduledBreaks;
     }
 
     @Override
@@ -44,6 +54,12 @@ public class ModuleTask implements ScriptTask {
     @Override
     public void run() {
         APIContext ctx = contextSupplier.get();
+        if (ctx != null && ctx.script() != null && ctx.script().getScript() != null
+                && (!ctx.script().isRunning() || ctx.script().isPaused() || ctx.script().isStopping())) return;
+        if (scheduledBreaks != null && scheduledBreaks.tick(ctx)) {
+            Time.sleep(500, 750);
+            return;
+        }
         if (!isLoggedIn(ctx)) {
             if (acceptPendingEula(ctx)) {
                 Time.sleep(900, 1400);
@@ -55,6 +71,15 @@ public class ModuleTask implements ScriptTask {
             return;
         }
 
+        if (closeWorldMapBeforeActions(ctx)) {
+            return;
+        }
+        Navigation.observe(ctx);
+        if (org.example.core.navigation.AccessRecovery.tick(ctx, logger)) {
+            Time.sleep(200, 350);
+            return;
+        }
+
         for (RuntimeController controller : runtimeControllers) {
             if (controller.shouldExecute(ctx)) {
                 runController(controller, ctx);
@@ -62,11 +87,23 @@ public class ModuleTask implements ScriptTask {
             }
         }
 
+        boolean refusedModule = false;
         for (F2PModule module : modules) {
+            if (org.example.core.navigation.AccessRecovery.isScopeBlocked(ctx, module.name())) {
+                refusedModule = true;
+                continue;
+            }
             if (module.shouldExecute(ctx)) {
                 runModule(module, ctx);
                 return;
             }
+        }
+
+        if (refusedModule) {
+            String reason = "Access refused repeatedly; this standalone has no alternative module";
+            logger.accept(reason);
+            ctx.script().pause(reason);
+            return;
         }
 
         logger.accept("No module was ready to execute");
@@ -84,6 +121,38 @@ public class ModuleTask implements ScriptTask {
         }
 
         logger.accept("Accepting OSRS EULA before login");
+        return true;
+    }
+
+    private boolean closeWorldMapBeforeActions(APIContext ctx) {
+        int packed = com.epicbot.api.gameval.InterfaceID.Worldmap.CLOSE;
+        WidgetChild close = ctx.widgets().get(packed >>> 16, packed & 0xffff);
+        if (close == null || !close.isValid() || !close.isVisible() || close.isHidden()) {
+            mapRecoveryAttempts = 0;
+            return false;
+        }
+
+        long now = System.currentTimeMillis();
+        if (now >= nextMapRecoveryLogAt) {
+            logger.accept("World map open; closing it before the next action"
+                    + (mapRecoveryAttempts > 0 ? " (retry " + (mapRecoveryAttempts + 1) + ")" : ""));
+            nextMapRecoveryLogAt = now + 10_000L;
+        }
+        mapRecoveryAttempts++;
+        if (!clickWidgetCenter(ctx, close) && mapRecoveryAttempts >= 2) {
+            ctx.keyboard().sendKey(KeyEvent.VK_ESCAPE);
+        }
+        Time.sleep(350, 650, () -> {
+            WidgetChild remaining = ctx.widgets().get(packed >>> 16, packed & 0xffff);
+            return remaining == null || !remaining.isValid()
+                    || !remaining.isVisible() || remaining.isHidden();
+        }, 100);
+        if (mapRecoveryAttempts >= 3) {
+            WidgetChild remaining = ctx.widgets().get(packed >>> 16, packed & 0xffff);
+            if (remaining != null && remaining.isValid() && remaining.isVisible() && !remaining.isHidden()) {
+                ctx.keyboard().sendKey(KeyEvent.VK_ESCAPE);
+            }
+        }
         return true;
     }
 
@@ -181,6 +250,8 @@ public class ModuleTask implements ScriptTask {
     private void runController(RuntimeController controller, APIContext ctx) {
         try {
             controller.execute(ctx);
+        } catch (CancellationException ignored) {
+            // A paused/stopped navigation must not issue another recovery action.
         } catch (Throwable e) {
             logger.accept("Runtime controller failed: " + controller.name()
                     + " - " + e.getClass().getSimpleName() + ": " + e.getMessage());
@@ -190,7 +261,10 @@ public class ModuleTask implements ScriptTask {
 
     private void runModule(F2PModule module, APIContext ctx) {
         try {
-            module.execute(ctx);
+            if (module instanceof ManagedF2PModule managed) managed.executeWithContext(ctx);
+            else module.execute(ctx);
+        } catch (CancellationException ignored) {
+            // Return to the task boundary after the script or route was cancelled.
         } catch (Throwable e) {
             logger.accept("Module failed: " + module.name()
                     + " - " + e.getClass().getSimpleName() + ": " + e.getMessage());
@@ -198,3 +272,4 @@ public class ModuleTask implements ScriptTask {
         }
     }
 }
+

@@ -65,6 +65,10 @@ public class LoopWatchdogController implements RuntimeController {
         resetThresholds();
     }
 
+    public void resetAfterBreak(APIContext ctx) {
+        initialize(System.currentTimeMillis(), Snapshot.capture(ctx, stats));
+    }
+
     @Override
     public String name() {
         return "runtime.loop_watchdog";
@@ -370,3 +374,4 @@ public class LoopWatchdogController implements RuntimeController {
         }
     }
 }
+

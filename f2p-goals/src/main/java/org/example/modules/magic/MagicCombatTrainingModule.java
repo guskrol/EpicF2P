@@ -87,6 +87,7 @@ public class MagicCombatTrainingModule implements ManagedF2PModule {
     private boolean pendingFundingSellOfferPlaced;
     private long nextPendingFundingSellCheckAt;
     private FundingPlanner.Decision activeFundingDecision;
+    private boolean liquidateAllFundingStock;
     private String activeFundingTargetItem;
     private int activeFundingTargetCoins;
     private Spell trustedAutocastSpell;
@@ -390,7 +391,7 @@ public class MagicCombatTrainingModule implements ManagedF2PModule {
 
         pendingOfferPlaced = true;
         nextPendingOfferCheckAt = System.currentTimeMillis() + 5_000L;
-        Time.sleep(5000, 8000);
+        Time.sleep(1200, 2200);
         collectGeOffers(ctx);
         return true;
     }
@@ -404,6 +405,7 @@ public class MagicCombatTrainingModule implements ManagedF2PModule {
     ) {
         activeFundingTargetItem = targetItem;
         activeFundingTargetCoins = targetCost + fundingPlanner.randomBufferCoins(MAGIC_FUNDING_BUFFER_COINS);
+        liquidateAllFundingStock = true;
 
         FundingPlanner.Decision decision = chooseMagicFundingDecision(ctx);
         if (decision.method() == FundingPlanner.Method.SELL_READY_STOCK) {
@@ -422,7 +424,7 @@ public class MagicCombatTrainingModule implements ManagedF2PModule {
     private boolean startMagicFundingStockSale(APIContext ctx, FundingPlanner.Decision decision) {
         activeFundingDecision = decision;
         pendingFundingSellItem = decision.itemName();
-        pendingFundingSellQuantity = Math.max(1, decision.inventoryCount() + decision.bankCount());
+        pendingFundingSellQuantity = decision.inventoryCount() + decision.bankCount();
         pendingFundingSellPrice = sellPriceFor(ctx, pendingFundingSellItem);
         pendingFundingSellOfferPlaced = false;
         nextPendingFundingSellCheckAt = 0L;
@@ -436,6 +438,23 @@ public class MagicCombatTrainingModule implements ManagedF2PModule {
         if (pendingFundingSellItem != null) {
             updateMagicFundingProgress(ctx);
             return handlePendingFundingSale(ctx);
+        }
+
+        if (liquidateAllFundingStock) {
+            if (closeGrandExchangeForBank(ctx, "Magic funding stock audit")) return true;
+            if (!isBankOpen(ctx)) {
+                if (!Navigation.isBankReachable(ctx)) Navigation.walkToBank(ctx);
+                else Navigation.openBank(ctx);
+                Time.sleep(900, 1400);
+                return true;
+            }
+            FundingPlanner.Decision stock = chooseMagicFundingDecision(ctx);
+            if (stock.method() == FundingPlanner.Method.SELL_READY_STOCK) {
+                return startMagicFundingStockSale(ctx, stock);
+            }
+            liquidateAllFundingStock = false;
+            if (activeFundingDecision == null) activeFundingDecision = stock;
+            log("Magic funding: all eligible bank stock audited");
         }
 
         if (activeFundingDecision == null) {
@@ -529,7 +548,8 @@ public class MagicCombatTrainingModule implements ManagedF2PModule {
 
         log("Selling Magic funding stock: " + quantity + "x " + pendingFundingSellItem
                 + " at " + pendingFundingSellPrice + " each");
-        boolean placed = ctx.grandExchange().placeSellOffer(pendingFundingSellItem, quantity, pendingFundingSellPrice);
+        boolean placed = org.example.core.items.GeSellOffer.place(
+                ctx, pendingFundingSellItem, quantity, pendingFundingSellPrice);
         if (!placed) {
             log("Magic funding sell offer was not placed; retrying " + pendingFundingSellItem);
             Time.sleep(1200, 1800);
@@ -538,13 +558,17 @@ public class MagicCombatTrainingModule implements ManagedF2PModule {
 
         pendingFundingSellOfferPlaced = true;
         nextPendingFundingSellCheckAt = System.currentTimeMillis() + 5_000L;
-        Time.sleep(5000, 8000);
+        Time.sleep(1200, 2200);
         collectGeOffers(ctx);
         closeGrandExchangeAfterTrade(ctx, "Magic funding sale");
         return true;
     }
 
     private void executeMagicFundingMoneyMaker(APIContext ctx, FundingPlanner.Decision decision) {
+        if (!org.example.core.navigation.AccessRecovery.fundingAllowed(ctx, decision.method())) {
+            activeFundingDecision = chooseMagicFundingDecision(ctx);
+            return;
+        }
         if (ctx.grandExchange().isOpen() && !fundingMoneyMakerCanUseGrandExchange(decision.method())) {
             log("Closing GE before Magic funding money maker: " + fundingMethodLabel(decision.method()));
             ctx.grandExchange().close();
@@ -556,9 +580,9 @@ public class MagicCombatTrainingModule implements ManagedF2PModule {
                 + " for " + activeFundingTargetItem);
         FundingPlanner.Method method = decision.method();
         if (method == FundingPlanner.Method.BEER_GLASS) {
-            beerGlassFundingModule.execute(ctx);
+            beerGlassFundingModule.executeWithContext(ctx);
         } else if (method == FundingPlanner.Method.MINING_SMITHING) {
-            miningSmithingFundingModule.execute(ctx);
+            miningSmithingFundingModule.executeWithContext(ctx);
         } else if (method == FundingPlanner.Method.FISHING_COOKING) {
             log("Magic funding received Fishing/Cooking, which cannot fund GP; rerolling funding method");
             activeFundingDecision = null;
@@ -648,8 +672,12 @@ public class MagicCombatTrainingModule implements ManagedF2PModule {
         FundingPlanner.Decision decision = fundingPlanner.choose(
                 activeFundingTargetCoins,
                 knownCoins,
-                magicFundingAssets(ctx)
+                magicFundingAssets(ctx),
+                method -> method != FundingPlanner.Method.WOODCUTTING
+                        && org.example.core.navigation.AccessRecovery.fundingAllowed(ctx, method)
         );
+        if (decision.method() == FundingPlanner.Method.UNAVAILABLE)
+            org.example.core.navigation.AccessRecovery.noFundingAlternative(ctx);
         if (decision.method() == FundingPlanner.Method.SELL_READY_STOCK) {
             log("Magic FundingPlanner selected stock sale: "
                     + decision.itemName()
@@ -743,6 +771,7 @@ public class MagicCombatTrainingModule implements ManagedF2PModule {
     }
 
     private void clearMagicFundingPool() {
+        liquidateAllFundingStock = false;
         activeFundingDecision = null;
         activeFundingTargetItem = null;
         activeFundingTargetCoins = 0;

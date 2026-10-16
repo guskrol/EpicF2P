@@ -54,6 +54,8 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
     private int lastBeerGlassCount = -1;
     private int consecutiveSearchFailures;
     private int consecutiveExactTileApproaches;
+    private int consecutiveDoorAttempts;
+    private long lastDoorAttemptAt;
 
     public BeerGlassCollectorModule(Consumer<String> logger, ScriptStats stats) {
         this.logger = logger;
@@ -67,7 +69,7 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
 
     @Override
     public boolean shouldExecute(APIContext ctx) {
-        return true;
+        return !org.example.core.navigation.AccessRecovery.isScopeBlocked(ctx, name());
     }
 
     @Override
@@ -82,6 +84,8 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
 
     @Override
     public void execute(APIContext ctx) {
+        if (!shouldExecute(ctx)) return;
+        org.example.core.navigation.AccessRecovery.beginScope(ctx, name());
         stats.startExperienceIfNeeded(ctx);
         stats.setTrainingSkill("Beer glass");
 
@@ -164,6 +168,7 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
     }
 
     private void handleBeerGlassShelves(APIContext ctx, SceneObject shelves) {
+        consecutiveDoorAttempts = 0;
         int before = beerGlassCount(ctx);
         trackBeerGlassProgress(before);
 
@@ -212,7 +217,7 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
         boolean clicked = clickShelvesSearch(ctx, shelves);
         if (!clicked && shouldRetryView && canTurnCameraToShelves()) {
             log("Beer glass shelves Search not clickable; turning camera once");
-            ctx.camera().turnTo(shelves);
+            org.example.core.navigation.CameraMovement.focus(ctx, shelves, this::log);
             Time.sleep(250, 500);
             clicked = clickShelvesSearch(ctx, shelves);
         }
@@ -225,6 +230,10 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
     }
 
     private boolean clickShelvesSearch(APIContext ctx, SceneObject shelves) {
+        if (ThreadLocalRandom.current().nextInt(100) < 30
+                && ctx.menu().interact("Search", shelves, false)) {
+            return true;
+        }
         return shelves.interact("Search")
                 || ctx.menu().interact("Search", shelves, false)
                 || ctx.menu().interact("Search", shelves, true);
@@ -261,7 +270,9 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
     }
 
     private SceneObject findBeerGlassShelves(APIContext ctx) {
-        for (int id : BEER_GLASS_SHELVES_IDS) {
+        int first = ThreadLocalRandom.current().nextInt(BEER_GLASS_SHELVES_IDS.length);
+        for (int offset = 0; offset < BEER_GLASS_SHELVES_IDS.length; offset++) {
+            int id = BEER_GLASS_SHELVES_IDS[(first + offset) % BEER_GLASS_SHELVES_IDS.length];
             SceneObject shelves = ctx.objects()
                     .query()
                     .id(id)
@@ -452,48 +463,25 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
     }
 
     private SceneObject findSorceressClosedDoor(APIContext ctx) {
-        SceneObject door = ctx.objects()
-                .query()
-                .id(SORCERESS_DOOR_CLOSED_ID)
-                .tileDistance(10)
-                .results()
-                .nearest();
-        if (door != null && door.isValid()) {
-            return door;
+        // Generic door IDs are shared by unrelated houses. Only this entrance is relevant.
+        for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) {
+            Tile tile = new Tile(SORCERESS_DOOR_TILE.getX() + dx, SORCERESS_DOOR_TILE.getY() + dy, 0);
+            for (SceneObject door : ctx.objects().getAt(tile))
+                if (isSorceressEntrance(door) && door.hasAction("Open")) return door;
         }
+        return null;
+    }
 
-        door = ctx.objects()
-                .query()
-                .id(SORCERESS_DOOR_CLOSED_ID)
-                .within(SORCERESS_DOOR_SEARCH_AREA)
-                .results()
-                .nearest();
-        if (door != null && door.isValid()) {
-            return door;
-        }
-
-        door = ctx.objects()
-                .query()
-                .named("Door")
-                .actions("Open")
-                .tileDistance(10)
-                .results()
-                .nearest();
-        if (door != null && door.isValid()) {
-            return door;
-        }
-
-        return ctx.objects()
-                .query()
-                .named("Door")
-                .actions("Open")
-                .within(SORCERESS_DOOR_SEARCH_AREA)
-                .results()
-                .nearest();
+    private boolean isSorceressEntrance(SceneObject object) {
+        if (object == null || !object.isValid() || object.getLocation() == null) return false;
+        Tile tile = object.getLocation();
+        return tile.getPlane() == 0 && Math.abs(tile.getX() - SORCERESS_DOOR_TILE.getX()) <= 1
+                && Math.abs(tile.getY() - SORCERESS_DOOR_TILE.getY()) <= 1
+                && "Door".equalsIgnoreCase(object.getName());
     }
 
     private boolean tryOpenSorceressDoor(APIContext ctx, SceneObject object, String label) {
-        if (object == null || !object.isValid()) {
+        if (!isSorceressEntrance(object)) {
             return false;
         }
         boolean knownClosedDoor = object.getId() == SORCERESS_DOOR_CLOSED_ID;
@@ -505,6 +493,14 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
         if (object.getId() == SORCERESS_DOOR_OPEN_ID && !object.hasAction("Open")) {
             return false;
         }
+        org.example.core.navigation.AccessRecovery.interaction(ctx, object, "Open");
+        long now = System.currentTimeMillis();
+        if (now - lastDoorAttemptAt > 30000L) consecutiveDoorAttempts = 0;
+        if (consecutiveDoorAttempts >= 3)
+            org.example.core.navigation.AccessRecovery.rejectCurrentAction(ctx,
+                    "Sorceress entrance remained closed after three attempts at " + object.getLocation());
+        consecutiveDoorAttempts++;
+        lastDoorAttemptAt = now;
 
         log("Opening " + label + " before Beer glass shelves: id=" + object.getId());
         boolean interacted = object.interact("Open")
@@ -516,15 +512,14 @@ public class BeerGlassCollectorModule implements ManagedF2PModule {
                 || ctx.menu().interact("Walk-through", object, false);
         if (interacted) {
             Time.sleep(900, 1600, () -> findSorceressClosedDoor(ctx) == null, 100);
+            if (findSorceressClosedDoor(ctx) == null) consecutiveDoorAttempts = 0;
         }
         return interacted;
     }
 
     private boolean walkLocallyTo(APIContext ctx, Locatable destination, String label) {
         log("Walking locally to " + label);
-        boolean walked = ctx.walking().walkOnScreen(destination)
-                || ctx.walking().walkToOnScreen(destination)
-                || ctx.walking().walkOnMap(destination)
+        boolean walked = Navigation.walkLocally(ctx, destination)
                 || ctx.walking().walkTo(destination);
         if (walked) {
             Time.sleep(700, 1200, () -> ctx.localPlayer().isMoving(), 100);

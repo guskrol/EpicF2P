@@ -10,7 +10,7 @@ import java.util.function.Consumer;
 public class CameraZoomController implements RuntimeController {
     private static final int ONE_TIME_SCROLLS = 18;
     private static final boolean ZOOM_OUT_SCROLL_DIRECTION = false;
-    private static final int SETUP_PITCH = 380;
+    private static final int SETUP_PITCH = 75;
 
     private final Consumer<String> logger;
     private boolean complete;
@@ -45,9 +45,8 @@ public class CameraZoomController implements RuntimeController {
             return;
         }
 
+        if (!org.example.core.navigation.CameraMovement.turn(ctx, ctx.camera().getYawDeg(), SETUP_PITCH, logger)) return;
         moveMouseToViewport(ctx);
-        ctx.camera().setPitch(SETUP_PITCH, true);
-        Time.sleep(250, 450);
 
         logger.accept("[Camera] One-time zoom out setup: scrolling camera far away once");
         ctx.mouse().scroll(ZOOM_OUT_SCROLL_DIRECTION, ONE_TIME_SCROLLS);

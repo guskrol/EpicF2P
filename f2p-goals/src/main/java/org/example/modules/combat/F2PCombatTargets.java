@@ -41,7 +41,7 @@ public final class F2PCombatTargets {
     public static final MobDefinition COWS = new MobDefinition(
             "cows",
             "Cow",
-            new Area(3247, 3255, 3268, 3300),
+            new Area(3253, 3258, 3263, 3295),
             new String[]{"Bones", "Coins"},
             "Cow calf"
     );
@@ -97,7 +97,7 @@ public final class F2PCombatTargets {
     public static final MobDefinition FALADOR_GUARDS = new MobDefinition(
             "falador_guards",
             "Guard",
-            new Area(2960, 3368, 2990, 3390),
+            new Area(2961, 3381, 2971, 3397),
             new String[]{"Bones", "Coins", "Iron dagger", "Bronze longsword"}
     );
     public static final MobDefinition EDGE_HILL_GIANTS = new MobDefinition(
@@ -105,6 +105,12 @@ public final class F2PCombatTargets {
             "Hill Giant",
             new Area(3110, 9834, 3122, 9846),
             new String[]{"Big bones", "Limpwurt root", "Coins", "Uncut sapphire", "Uncut emerald", "Uncut ruby", "Giant key"}
+    );
+    public static final MobDefinition BRUTUS = new MobDefinition(
+            "brutus", "Brutus", new Area(3260, 3292, 3264, 3296),
+            new String[]{"Bull bones", "Raw t-bone steak", "Mooleta", "Cow slippers",
+                    "Bottomless milk bucket (empty)", "Coins", "Iron arrow", "Air rune",
+                    "Mind rune", "Chaos rune", "Logs", "Oak logs", "Clue scroll (beginner)"}
     );
 
     private static final Map<CombatPhase, List<MobDefinition>> TARGETS_BY_PHASE = Map.of(

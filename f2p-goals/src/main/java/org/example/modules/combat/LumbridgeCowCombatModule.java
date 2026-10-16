@@ -1,5 +1,6 @@
 package org.example.modules.combat;
 
+import com.epicbot.api.gameval.VarbitID;
 import com.epicbot.api.shared.APIContext;
 import com.epicbot.api.shared.entity.Actor;
 import com.epicbot.api.shared.entity.GroundItem;
@@ -33,6 +34,8 @@ import java.awt.Point;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
@@ -63,7 +66,6 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private static final int OWN_LOOT_RADIUS_TILES = 2;
     private static final long OWN_LOOT_WINDOW_MILLIS = 25_000L;
     private static final long LOOT_FILTER_LOG_INTERVAL_MILLIS = 5_000L;
-    private static final long MAX_TARGET_TRAVEL_MILLIS = 3 * 60 * 1000L;
     private static final long MELEE_ATTACK_CLICK_LOCK_MILLIS = 4_000L;
     private static final long RANGED_ATTACK_CLICK_LOCK_MILLIS = 6_500L;
     private static final boolean LOW_TIER_COMBAT_ONLY = false;
@@ -99,10 +101,12 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private static final int MELEE_PLAN_MIN_XP = 3500;
     private static final int MELEE_PLAN_MAX_XP = 11000;
     private static final Area GE_AREA = new Area(3160, 3478, 3175, 3490);
-    private static final Area EDGE_HOBGOBLIN_ROUTE_GATE_SEARCH = new Area(3113, 9866, 3138, 9890);
-    private static final Tile EDGE_HOBGOBLIN_GATE_APPROACH_TILE = new Tile(3132, 9877, 0);
     private static final Tile EDGE_HOBGOBLIN_ROOM_TILE = new Tile(3125, 9877, 0);
     private static final String[] GEAR_FUNDING_ITEMS = F2PItemRegistry.fundingSellItems();
+    private static final String[] POST_UNLOCK_FUNDING_ITEMS = {
+            "Oak logs", "Tin ore", "Copper ore", "Cowhide", "Iron bar",
+            "Big bones", "T-bone steak", "Raw t-bone steak", "Chaos rune"
+    };
     private static final String[] NON_SELLABLE_FUNDING_ITEMS = F2PItemRegistry.restrictedGeItems();
     private static final String[] WC_FUNDING_AXES = {
             "Mithril axe",
@@ -323,7 +327,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private final BeerGlassCollectorModule beerGlassFundingModule;
     private final FishingCookingModule fishingCookingFundingModule;
     private final MiningSmithingModule miningSmithingFundingModule;
-    private final Set<String> geBlockedFundingItems = new HashSet<>();
+    private final Map<String, Long> geBlockedFundingItems = new HashMap<>();
+    private final BrutusEncounter brutusEncounter;
+    private boolean brutusOnly;
     private FundingPlanner.Decision activeFundingDecision;
     private long bankAfterFullInventoryAt;
     private boolean initialGearChecked;
@@ -346,9 +352,11 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private MobDefinition currentTarget;
     private CombatPhase currentCombatPhase;
     private GearItem pendingGearPurchase;
+    private int pendingGearUnitBuyPrice;
     private boolean pendingGearPurchaseOptional;
     private int pendingRangedArrowBankStock = -1;
     private boolean woodcuttingFundingMode;
+    private boolean liquidateAllFundingStock;
     private boolean pendingStarterFoodPurchase;
     private int foodStockTarget;
     private int woodcuttingFundingTargetCoins;
@@ -362,10 +370,13 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private boolean gearBuyOfferPending;
     private long desiredGearPurchaseRetryAt;
     private long geRestrictionRetryAt;
+    private long tradePrerequisitesCheckedUntil;
+    private boolean tradePrerequisitesMet;
     private int killsOnCurrentTarget;
     private int killsBeforeTargetSwitch;
     private int targetSearchFailures;
-    private long targetTravelStartedAt;
+    private final TargetTravelProgress targetTravelProgress = new TargetTravelProgress();
+    private long nextTargetWalkAt;
     private long lastKillRecordedAt;
     private Tile lastCombatNpcTile;
     private Tile lastCombatPlayerTile;
@@ -404,6 +415,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
         this.trainingMode = trainingMode == null ? TrainingMode.MELEE : trainingMode;
         this.caps = caps;
         this.magicGearPreparation = magicGearPreparation;
+        this.brutusEncounter = new BrutusEncounter(logger, stats);
         this.foodStockTarget = randomFoodStockTarget();
         this.beerGlassFundingModule = new BeerGlassCollectorModule(logger, stats);
         this.fishingCookingFundingModule = new FishingCookingModule(logger, stats, fundingSkillCaps, false, true);
@@ -412,6 +424,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
     @Override
     public String name() {
+        if (brutusOnly) return "combat.brutus_test";
         return switch (trainingMode) {
             case RANGED -> "combat.ranged_engine";
             case MAGIC -> "combat.magic_engine";
@@ -421,6 +434,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
     @Override
     public boolean shouldExecute(APIContext ctx) {
+        if (brutusOnly) return eligibleForBrutus(ctx);
         if (trainingMode == TrainingMode.RANGED) {
             return !caps.isComplete(ctx, Skill.Skills.RANGED);
         }
@@ -435,8 +449,25 @@ public class LumbridgeCowCombatModule implements F2PModule {
         return false;
     }
 
+    public void useBrutusOnly() {
+        if (trainingMode != TrainingMode.MELEE) throw new IllegalStateException("Brutus test requires melee mode");
+        brutusOnly = true;
+    }
+
+    public void onDeathDetected() {
+        if (brutusOnly && trainingMode == TrainingMode.MELEE
+                && (currentTarget == F2PCombatTargets.BRUTUS || brutusEncounter.isActive())) {
+            brutusEncounter.onDeath();
+        }
+    }
+
+    public boolean needsBrutusRecoveryPriority() {
+        return brutusOnly && brutusEncounter.needsRecoveryPriority();
+    }
+
     public boolean isProtectedFundingSubphase() {
-        return woodcuttingFundingMode || activeFundingDecision != null;
+        return woodcuttingFundingMode || activeFundingDecision != null
+                || (currentTarget == F2PCombatTargets.BRUTUS && brutusEncounter.isActive());
     }
 
     public String protectedFundingLabel() {
@@ -449,13 +480,41 @@ public class LumbridgeCowCombatModule implements F2PModule {
     @Override
     public void execute(APIContext ctx) {
         if (!shouldExecute(ctx)) {
-            stats.setStatus("Combat training caps reached");
+            stats.setStatus(brutusOnly
+                    ? "Brutus test requires completed quest/rewards and 15 Attack, Strength, Defence"
+                    : "Combat training caps reached");
             Time.sleep(600, 900);
             return;
         }
         logCombatTickEntered();
         stats.startExperienceIfNeeded(ctx);
-        updateCombatTracking(ctx);
+        if (brutusOnly && brutusEncounter.needsGraveRecovery()) {
+            brutusEncounter.recoverGrave(ctx);
+            return;
+        }
+        if (trainingMode == TrainingMode.MELEE && BrutusEncounter.inside(ctx)
+                && ctx.vars().getVarbit(VarbitID.COWQUEST) >= 22) {
+            if (!brutusOnly) {
+                if (currentTarget != F2PCombatTargets.BRUTUS) {
+                    currentTarget = F2PCombatTargets.BRUTUS;
+                    brutusEncounter.startTrip(0);
+                    brutusEncounter.requestExit();
+                    log("Brutus training disabled in F2P Goals; leaving arena");
+                }
+                brutusEncounter.tick(ctx);
+                return;
+            }
+            if (currentTarget != F2PCombatTargets.BRUTUS) {
+                currentTarget = F2PCombatTargets.BRUTUS;
+                currentCombatPhase = currentCombatPhase(ctx);
+                killsBeforeTargetSwitch = randomInt(3, 6);
+                brutusEncounter.startTrip(killsBeforeTargetSwitch);
+            }
+            brutusEncounter.tick(ctx);
+            return;
+        }
+        if (currentTarget != F2PCombatTargets.BRUTUS) updateCombatTracking(ctx);
+        else wasInCombat = false;
 
         if (closeWorldSwitcherBeforeCombat(ctx)) {
             logCombatDecision("Combat decision: closed world switcher");
@@ -499,17 +558,44 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return;
         }
 
-        if (handleObsoleteGearSale(ctx)) {
-            logCombatDecision("Combat decision: old tier gear sale handled");
-            return;
-        }
-
         if (ensureCombatStyle(ctx)) {
             logCombatDecision("Combat decision: combat style handled");
             return;
         }
 
         ensureCombatTarget(ctx);
+
+        if (currentTarget == F2PCombatTargets.BRUTUS) {
+            if (brutusEncounter.isTripComplete()) {
+                brutusEncounter.reset();
+                switchCombatTarget(ctx, true);
+                return;
+            }
+            if (inventoryFoodCount(ctx) < 5) {
+                if (!isBankOpen(ctx)) openBankOrWalk(ctx, "Brutus food supply");
+                else if (bankFoodCount(ctx) > 0) withdrawFoodFromBank(ctx);
+                else { pendingStarterFoodPurchase = true; handleStarterFoodPurchase(ctx); }
+                return;
+            }
+            ItemWidget wornWeapon = ctx.equipment().getItem(IEquipmentAPI.Slot.WEAPON);
+            if (wornWeapon != null && !matchesGearName(wornWeapon.getName(), WEAPONS)) {
+                if (wornWeapon.interact("Remove")) {
+                    log("Removing ranged/magic weapon before Brutus melee training");
+                    initialGearChecked = false;
+                }
+                return;
+            }
+            if (wornWeapon == null) {
+                initialGearChecked = false;
+                prepareCombatGear(ctx);
+                return;
+            }
+            if (ctx.localPlayer().getHealthPercent() < 75 && eatFood(ctx)) return;
+            if (ctx.bank().isOpen()) { ctx.bank().close(); return; }
+            if (ctx.grandExchange().isOpen()) { ctx.grandExchange().close(); return; }
+            brutusEncounter.tick(ctx);
+            return;
+        }
 
         buryBones(ctx);
 
@@ -531,35 +617,62 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return;
         }
 
-        if (prepareGatedCombatTarget(ctx, combatArea)) {
-            logCombatDecision("Combat decision: gated target route handled");
-            Time.sleep(800, 1200);
-            return;
-        }
-
         if (!combatArea.contains(ctx.localPlayer().getLocation())) {
-            if (targetTravelStartedAt == 0L) {
-                targetTravelStartedAt = System.currentTimeMillis();
-            } else if (System.currentTimeMillis() - targetTravelStartedAt >= MAX_TARGET_TRAVEL_MILLIS
-                    && !isVeryWeakAccount(ctx)) {
-                log("Could not reach " + currentTargetLabel(ctx) + "; switching combat target");
+            TargetTravelProgress.Decision travel = targetTravelProgress.observe(
+                    ctx.localPlayer().getLocation(), System.currentTimeMillis());
+            if (travel == TargetTravelProgress.Decision.SWITCH_TARGET && !isVeryWeakAccount(ctx)) {
+                log("No movement after route recovery toward " + currentTargetLabel(ctx)
+                        + "; switching combat target");
                 switchCombatTarget(ctx, true);
                 return;
             }
+            if (travel == TargetTravelProgress.Decision.RETRY_ROUTE
+                    || (travel == TargetTravelProgress.Decision.SWITCH_TARGET && isVeryWeakAccount(ctx))) {
+                log("No movement toward " + currentTargetLabel(ctx) + "; refreshing route once");
+                Navigation.retryRoute(ctx);
+                nextTargetWalkAt = 0L;
+            }
 
+            if (ctx.localPlayer().isMoving() || System.currentTimeMillis() < nextTargetWalkAt) {
+                Time.sleep(300, 500);
+                return;
+            }
             log("Walking to " + currentTargetLabel(ctx));
-            walkToArea(ctx, combatArea, currentTargetLabel(ctx));
+            if (isEdgeHobgoblinTarget(ctx)) {
+                walkToTile(ctx, EDGE_HOBGOBLIN_ROOM_TILE, "Hobgoblin area");
+            } else if ("falador_guards".equals(activeTarget(ctx).key())) {
+                Tile[] guardApproach = {
+                        new Tile(2964, 3384, 0), new Tile(2965, 3384, 0),
+                        new Tile(2966, 3384, 0), new Tile(2964, 3385, 0),
+                        new Tile(2965, 3385, 0), new Tile(2966, 3385, 0),
+                        new Tile(2965, 3386, 0)
+                };
+                walkToTile(ctx, Navigation.destinationInArea(ctx, combatArea, guardApproach),
+                        "Falador guards near entrance");
+            } else {
+                walkToArea(ctx, combatArea, currentTargetLabel(ctx));
+            }
+            nextTargetWalkAt = System.currentTimeMillis()
+                    + ThreadLocalRandom.current().nextLong(1400L, 2401L);
             logCombatDecision("Combat decision: walking to target area");
-            Time.sleep(800, 1200);
+            Time.sleep(450, 700);
             return;
         }
-        targetTravelStartedAt = 0L;
+        targetTravelProgress.reset();
 
         NPC target = findCombatTarget(ctx, combatArea);
 
         if (target == null) {
             log("No available " + currentTargetLabel(ctx) + " found");
             targetSearchFailures++;
+            NPC blocked = findAnyCombatTarget(ctx, combatArea);
+            if (blocked != null && blocked.isValid() && blocked.getLocation() != null
+                    && targetSearchFailures < MAX_TARGET_SEARCH_FAILURES) {
+                log("Visible " + blocked.getName() + " is unreachable; resolving route before attacking");
+                if (!openBlockingRouteObject(ctx, blocked.getLocation(), "Combat enclosure")) {
+                    Navigation.walkToNoTeleports(ctx, blocked.getLocation());
+                }
+            }
             if (targetSearchFailures >= MAX_TARGET_SEARCH_FAILURES && !isVeryWeakAccount(ctx)) {
                 log("Target search failed repeatedly; switching combat target");
                 switchCombatTarget(ctx, true);
@@ -1085,30 +1198,53 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private void ensureCombatTarget(APIContext ctx) {
         CombatPhase phase = currentCombatPhase(ctx);
         boolean weakAccount = isVeryWeakAccount(ctx);
+        if (currentTarget == F2PCombatTargets.BRUTUS && brutusEncounter.isTripComplete()) {
+            switchCombatTarget(ctx, true);
+            return;
+        }
+        if (currentTarget == F2PCombatTargets.BRUTUS && brutusEncounter.isActive()) return;
         if (currentTarget == null
                 || currentCombatPhase != phase
                 || killsBeforeTargetSwitch <= 0
                 || (!weakAccount && killsOnCurrentTarget >= killsBeforeTargetSwitch)
-                || (weakAccount && !F2PCombatTargets.CHICKENS.key().equals(currentTarget.key()))) {
+                || (weakAccount && !brutusOnly
+                    && !F2PCombatTargets.CHICKENS.key().equals(currentTarget.key()))) {
             switchCombatTarget(ctx, false);
         }
     }
 
     private void switchCombatTarget(APIContext ctx, boolean forceDifferent) {
         MobDefinition previous = currentTarget;
+        if (previous == F2PCombatTargets.BRUTUS && BrutusEncounter.inside(ctx)) {
+            brutusEncounter.requestExit();
+            return;
+        }
+        if (previous == F2PCombatTargets.BRUTUS) brutusEncounter.reset();
         currentCombatPhase = currentCombatPhase(ctx);
-        currentTarget = isVeryWeakAccount(ctx)
-                ? F2PCombatTargets.CHICKENS
+        currentTarget = brutusOnly ? F2PCombatTargets.BRUTUS
+                : isVeryWeakAccount(ctx) ? F2PCombatTargets.CHICKENS
                 : F2PCombatTargets.pickRandomForLevel(combatTargetLevel(ctx), forceDifferent ? previous : null);
         killsOnCurrentTarget = 0;
-        killsBeforeTargetSwitch = currentCombatPhase.randomKillsBeforeSwitch();
+        killsBeforeTargetSwitch = currentTarget == F2PCombatTargets.BRUTUS
+                ? randomInt(3, 6) : currentCombatPhase.randomKillsBeforeSwitch();
+        if (currentTarget == F2PCombatTargets.BRUTUS) brutusEncounter.startTrip(killsBeforeTargetSwitch);
         targetSearchFailures = 0;
-        targetTravelStartedAt = 0L;
+        targetTravelProgress.reset();
+        nextTargetWalkAt = 0L;
         clearPendingAttackAttempt();
         clearRecentOwnLootSource();
         log("Combat target selected: " + currentTarget.primaryName()
                 + " (" + currentCombatPhase.name().toLowerCase()
                 + ", switch after ~" + killsBeforeTargetSwitch + " kills)");
+    }
+
+    private boolean eligibleForBrutus(APIContext ctx) {
+        return trainingMode == TrainingMode.MELEE
+                && ctx.vars().getVarbit(VarbitID.COWQUEST) >= 22
+                && ctx.vars().getVarbit(VarbitID.COWQUEST_REWARD) > 0
+                && ctx.skills().get(Skill.Skills.ATTACK).getRealLevel() >= 15
+                && ctx.skills().get(Skill.Skills.STRENGTH).getRealLevel() >= 15
+                && ctx.skills().get(Skill.Skills.DEFENCE).getRealLevel() >= 15;
     }
 
     private CombatPhase currentCombatPhase(APIContext ctx) {
@@ -1150,49 +1286,6 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
     private String[] currentLootNames(APIContext ctx) {
         return activeTarget(ctx).lootNames();
-    }
-
-    private boolean prepareGatedCombatTarget(APIContext ctx, Area combatArea) {
-        if (!isEdgeHobgoblinTarget(ctx)) {
-            return false;
-        }
-
-        if (findReachableCombatTarget(ctx, combatArea) != null) {
-            return false;
-        }
-
-        NPC visibleTarget = findAnyCombatTarget(ctx, combatArea);
-        if (visibleTarget != null && visibleTarget.isValid()) {
-            Tile targetTile = visibleTarget.getLocation();
-            if (openBlockingRouteObject(ctx, targetTile, "Hobgoblin gate")) {
-                return true;
-            }
-        }
-
-        SceneObject gate = findHobgoblinRouteGate(ctx);
-        if (gate != null && gate.isValid()) {
-            if (gate.tileDistanceTo(ctx) > 2) {
-                log("Walking to Hobgoblin gate before attacking");
-                walkToTile(ctx, gate.getLocation(), "Hobgoblin gate");
-                return true;
-            }
-
-            return tryOpenRouteObject(ctx, gate, "Hobgoblin gate");
-        }
-
-        if (!combatArea.contains(ctx.localPlayer().getLocation())) {
-            log("Routing to Hobgoblin gate approach before combat");
-            walkToTile(ctx, EDGE_HOBGOBLIN_GATE_APPROACH_TILE, "Hobgoblin gate approach");
-            return true;
-        }
-
-        if (visibleTarget != null && visibleTarget.isValid()) {
-            log("Hobgoblin is visible but not reachable; repositioning inside the gate route");
-            walkToTile(ctx, EDGE_HOBGOBLIN_ROOM_TILE, "Hobgoblin room");
-            return true;
-        }
-
-        return false;
     }
 
     private boolean isEdgeHobgoblinTarget(APIContext ctx) {
@@ -1259,18 +1352,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return target;
         }
 
-        target = findAnyCombatTarget(ctx, combatArea);
-        if (target != null && target.isValid()) {
-            if (isEdgeHobgoblinTarget(ctx)) {
-                log("Hobgoblin found behind wall/gate; waiting for route access instead of attacking through wall");
-                return null;
-            }
-            log("Found " + target.getName()
-                    + " inside " + currentTargetLabel(ctx)
-                    + " without reachable filter; attempting attack fallback");
-            return target;
-        }
-
+        // Visibility is not evidence of a route through a fence or closed gate.
         return null;
     }
 
@@ -1309,26 +1391,6 @@ public class LumbridgeCowCombatModule implements F2PModule {
         return tryOpenRouteObject(ctx, blocker, label);
     }
 
-    private SceneObject findHobgoblinRouteGate(APIContext ctx) {
-        SceneObject gate = ctx.objects()
-                .query()
-                .actions("Open")
-                .nameContains("Gate", "Door")
-                .within(EDGE_HOBGOBLIN_ROUTE_GATE_SEARCH)
-                .results()
-                .nearest();
-        if (gate != null && gate.isValid()) {
-            return gate;
-        }
-
-        return ctx.objects()
-                .query()
-                .actions("Open")
-                .within(EDGE_HOBGOBLIN_ROUTE_GATE_SEARCH)
-                .results()
-                .nearest();
-    }
-
     private boolean tryOpenRouteObject(APIContext ctx, SceneObject object, String label) {
         if (object == null || !object.isValid()) {
             return false;
@@ -1344,6 +1406,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
 
         log("Opening " + label + ": " + object.getName());
+        org.example.core.navigation.AccessRecovery.interaction(ctx, object, "Open/Enter");
         boolean interacted = object.interact("Open")
                 || object.interact("Enter")
                 || object.interact("Walk-through")
@@ -1536,7 +1599,11 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
 
         int quantity = pendingPurchaseQuantity(ctx);
-        int unitBuyPrice = buyPriceFor(ctx, pendingGearPurchase.name);
+        int unitBuyPrice = pendingGearUnitBuyPrice;
+        if (unitBuyPrice <= 0) {
+            unitBuyPrice = buyPriceFor(ctx, pendingGearPurchase.name);
+            pendingGearUnitBuyPrice = unitBuyPrice;
+        }
         int buyPrice = unitBuyPrice * quantity;
 
         if (ctx.inventory().getCount(true, "Coins") >= buyPrice) {
@@ -1704,6 +1771,12 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return;
         }
 
+        if (gearBuyOfferPending && hasActiveGearBuyOffer(ctx)) {
+            Time.sleep(500, 900);
+            return;
+        }
+        gearBuyOfferPending = false;
+
         int quantity = pendingPurchaseQuantity(ctx);
         int unitBuyPrice = Math.max(1, buyPrice / Math.max(1, quantity));
         log("Buying gear upgrade: " + quantity + "x " + pendingGearPurchase.name + " for " + unitBuyPrice + " each");
@@ -1724,7 +1797,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
 
         if (placed) {
-            Time.sleep(5000, 9000);
+            Time.sleep(1500, 2800);
             collectGeOffers(ctx);
         }
 
@@ -1736,7 +1809,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
         } else {
             gearBuyOfferPending = true;
             log("Gear buy offer is pending: " + pendingGearPurchase.name);
-            gearPurchaseDeferredUntil = System.currentTimeMillis() + randomLong(1, 3) * 60_000L;
+            gearPurchaseDeferredUntil = System.currentTimeMillis() + randomLong(8, 16) * 1000L;
         }
 
         Time.sleep(600, 900);
@@ -1953,7 +2026,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
 
         if (placed) {
-            Time.sleep(5000, 9000);
+            Time.sleep(1500, 2800);
             collectGeOffers(ctx);
         }
 
@@ -2020,85 +2093,37 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return;
         }
 
-        int quantity = inventoryFundingItemCount(ctx, itemName);
+        int available = inventoryFundingItemCount(ctx, itemName);
         int sellPrice = sellPriceFor(ctx, itemName);
+        int quantity = available;
+        if (quantity <= 0) return;
         log("Selling " + quantity + "x " + itemName + " at " + sellPrice + " each for " + fundingTargetName());
-        boolean placed = ctx.grandExchange().placeSellOffer(itemName, quantity, sellPrice);
+        boolean placed = org.example.core.items.GeSellOffer.place(ctx, itemName, quantity, sellPrice);
         if (isGeTradeRestrictedForItem(ctx, itemName)) {
             markFundingItemBlockedByGe(ctx, itemName);
             return;
         }
 
         if (placed) {
-            Time.sleep(5000, 9000);
+            Time.sleep(1200, 2200);
+            if (isPostUnlockFundingItem(itemName) && hasAcceptedSellOffer(ctx, itemName)) {
+                stats.markGeTradeUnlockVerified(ctx);
+                log("GE trade unlock verified: accepted sell offer for " + itemName);
+            }
             collectGeOffers(ctx);
             gearPurchaseDeferredUntil = 0;
-            closeGrandExchangeAfterTrade(ctx, "funding sale");
+            if (firstFundingInventoryItem(ctx) == null) {
+                closeGrandExchangeAfterTrade(ctx, "funding sale");
+            }
             return;
         }
 
         Time.sleep(600, 900);
-    }
-
-    private boolean handleObsoleteGearSale(APIContext ctx) {
-        if (pendingGearPurchase != null && !pendingGearPurchaseOptional) {
-            return false;
-        }
-
-        String itemName = firstObsoleteGearInventoryItem(ctx);
-        if (itemName == null) {
-            return false;
-        }
-
-        if (ctx.bank().isOpen()) {
-            ctx.bank().close();
-            Time.sleep(600, 900);
-            return true;
-        }
-
-        if (!GE_AREA.contains(ctx.localPlayer().getLocation())) {
-            log("Walking to GE to sell old tier gear: " + itemName);
-            walkToArea(ctx, GE_AREA, "GE");
-            Time.sleep(1200, 1800);
-            return true;
-        }
-
-        if (!ctx.grandExchange().isOpen()) {
-            log("Opening GE to sell old tier gear: " + itemName);
-            ctx.grandExchange().open();
-            Time.sleep(1200, 1800, () -> ctx.grandExchange().isOpen(), 100);
-            return true;
-        }
-
-        collectGeOffers(ctx);
-
-        int quantity = inventoryFundingItemCount(ctx, itemName);
-        if (quantity <= 0) {
-            return true;
-        }
-
-        int sellPrice = sellPriceFor(ctx, itemName);
-        log("Selling old tier gear: " + quantity + "x " + itemName + " at " + sellPrice + " each");
-        boolean placed = ctx.grandExchange().placeSellOffer(itemName, quantity, sellPrice);
-        if (isGeTradeRestrictedForItem(ctx, itemName)) {
-            markFundingItemBlockedByGe(ctx, itemName);
-            return true;
-        }
-
-        if (placed) {
-            Time.sleep(5000, 9000);
-            collectGeOffers(ctx);
-            gearPurchaseDeferredUntil = 0;
-            closeGrandExchangeAfterTrade(ctx, "old tier gear sale");
-            return true;
-        }
-
-        Time.sleep(600, 900);
-        return true;
     }
 
     private void startWoodcuttingFunding(APIContext ctx, int gearBuyPrice, String reason) {
         woodcuttingFundingMode = true;
+        liquidateAllFundingStock = true;
         pendingStarterFoodPurchase = shouldFundStarterFood(ctx);
         woodcuttingFundingGearName = fundingTargetName();
         int gearBudget = pendingGearPurchase == null ? gearBuyPrice : pendingGearPurchaseBudget(ctx);
@@ -2148,9 +2173,21 @@ public class LumbridgeCowCombatModule implements F2PModule {
         targetCoins = woodcuttingFundingTargetCoins;
 
         updateCombatFundingProgress(ctx, targetCoins);
+        if (activeFundingDecision != null && activeFundingDecision.method() == FundingPlanner.Method.BEER_GLASS
+                && org.example.core.navigation.AccessRecovery.fundingAllowed(ctx, FundingPlanner.Method.BEER_GLASS)
+                && ctx.bank().isOpen() && inventoryFundingItemCount(ctx, "Beer glass") > 0) {
+            // Finish depositing the current load before choosing a sale of banked glasses.
+            // This makes the existing noted withdrawal collect the whole accumulated batch.
+            beerGlassFundingModule.executeWithContext(ctx);
+            return true;
+        }
         boolean geRestrictionActive = isGeRestrictionRetryActive();
+        if (liquidateAllFundingStock && !isBankOpen(ctx) && !hasFundingItemInInventory(ctx)) {
+            openBankOrWalk(ctx, "remaining sellable funding stock");
+            return true;
+        }
         FundingPlanner.Decision decision = null;
-        if (geRestrictionActive || knownCoins(ctx) < targetCoins) {
+        if (liquidateAllFundingStock || geRestrictionActive || knownCoins(ctx) < targetCoins) {
             decision = updateFundingDecision(ctx, targetCoins);
         }
         if (decision != null && decision.method() == FundingPlanner.Method.SELL_READY_STOCK) {
@@ -2162,6 +2199,10 @@ public class LumbridgeCowCombatModule implements F2PModule {
             if (withdrawFundingItemFromBank(ctx)) {
                 return true;
             }
+        }
+        if (liquidateAllFundingStock) {
+            liquidateAllFundingStock = false;
+            log("Funding bank audit complete: no eligible stock remains for sale");
         }
 
         if (hasNonSellableFundingItemInInventory(ctx)) {
@@ -2232,6 +2273,10 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private void executeFundingMoneyMaker(APIContext ctx, FundingPlanner.Decision decision) {
+        if (!org.example.core.navigation.AccessRecovery.fundingAllowed(ctx, decision.method())) {
+            activeFundingDecision = null;
+            return;
+        }
         if (ctx.grandExchange().isOpen() && !fundingMoneyMakerCanUseGrandExchange(decision.method())) {
             log("Closing GE before funding money maker: " + fundingMethodLabel(decision.method()));
             ctx.grandExchange().close();
@@ -2243,9 +2288,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
                 + " for " + fundingTargetName());
         FundingPlanner.Method method = decision.method();
         if (method == FundingPlanner.Method.BEER_GLASS) {
-            beerGlassFundingModule.execute(ctx);
+            beerGlassFundingModule.executeWithContext(ctx);
         } else if (method == FundingPlanner.Method.MINING_SMITHING) {
-            miningSmithingFundingModule.execute(ctx);
+            miningSmithingFundingModule.executeWithContext(ctx);
         } else if (method == FundingPlanner.Method.FISHING_COOKING) {
             log("Fishing/Cooking is food training, not GP funding; rerolling funding method");
             activeFundingDecision = null;
@@ -2284,6 +2329,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
     private void clearFundingState() {
         woodcuttingFundingMode = false;
+        liquidateAllFundingStock = false;
         woodcuttingFundingTargetCoins = 0;
         woodcuttingFundingGearName = null;
         woodcuttingFundingChopFailures = 0;
@@ -2316,7 +2362,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
         if (pendingGearPurchase == null || isPendingGearPurchaseSatisfied(ctx)) {
             return 0;
         }
-        long budget = (long) pendingPurchaseQuantity(ctx) * buyPriceFor(ctx, pendingGearPurchase.name);
+        int unitPrice = pendingGearUnitBuyPrice > 0 ? pendingGearUnitBuyPrice
+                : buyPriceFor(ctx, pendingGearPurchase.name);
+        long budget = (long) pendingPurchaseQuantity(ctx) * unitPrice;
         return (int) Math.min(Integer.MAX_VALUE, budget);
     }
 
@@ -2361,6 +2409,11 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
     private FundingPlanner.Decision updateFundingDecision(APIContext ctx, int targetCoins) {
         if (activeFundingDecision != null
+                && !org.example.core.navigation.AccessRecovery.fundingAllowed(ctx, activeFundingDecision.method())) {
+            log("Access refused for funding method; discarding cached decision " + activeFundingDecision.method());
+            activeFundingDecision = null;
+        }
+        if (activeFundingDecision != null
                 && activeFundingDecision.method() == FundingPlanner.Method.SELL_READY_STOCK
                 && !isFundingItemBlockedByGe(activeFundingDecision.itemName())
                 && (inventoryFundingItemCount(ctx, activeFundingDecision.itemName()) > 0
@@ -2369,7 +2422,10 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return activeFundingDecision;
         }
 
-        FundingPlanner.Decision planned = fundingPlanner.choose(targetCoins, knownCoins(ctx), fundingAssets(ctx));
+        FundingPlanner.Decision planned = fundingPlanner.choose(targetCoins, knownCoins(ctx), fundingAssets(ctx),
+                method -> org.example.core.navigation.AccessRecovery.fundingAllowed(ctx, method));
+        if (planned.method() == FundingPlanner.Method.UNAVAILABLE)
+            org.example.core.navigation.AccessRecovery.noFundingAlternative(ctx);
         if (planned.method() == FundingPlanner.Method.SELL_READY_STOCK) {
             activeFundingDecision = planned;
             log("FundingPlanner selected stock sale: "
@@ -2446,10 +2502,15 @@ public class LumbridgeCowCombatModule implements F2PModule {
             if (isFundingItemBlockedByGe(itemName)) {
                 continue;
             }
+            int inventoryCount = inventoryFundingItemCount(ctx, itemName);
+            int bankCount = ctx.bank().isOpen() ? fundingItemCountInBank(ctx, itemName) : 0;
+            if (inventoryCount <= 0 && bankCount <= 0) {
+                continue;
+            }
             assets.add(new FundingPlanner.Asset(
                     itemName,
-                    inventoryFundingItemCount(ctx, itemName),
-                    ctx.bank().isOpen() ? fundingItemCountInBank(ctx, itemName) : 0,
+                    inventoryCount,
+                    bankCount,
                     sellPriceFor(ctx, itemName)
             ));
         }
@@ -2494,7 +2555,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
                 + " logs=" + woodcuttingFundingBankLogsSnapshot
                 + " target=" + targetCoins);
 
-        if (totalCoins >= targetCoins) {
+        if (totalCoins >= targetCoins
+                && fundingPlanner.choose(targetCoins, totalCoins, fundingAssets(ctx)).method()
+                != FundingPlanner.Method.SELL_READY_STOCK) {
             log("Bank already has enough coins for " + fundingTargetName() + "; skipping funding");
             clearFundingState();
             return false;
@@ -2657,6 +2720,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private void chopFundingLogs(APIContext ctx, int targetCoins) {
+        org.example.core.navigation.AccessRecovery.beginScope(ctx, "skills.woodcutting_firemaking");
         if (ctx.bank().isOpen()) {
             ctx.bank().close();
             Time.sleep(600, 900);
@@ -2834,9 +2898,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
         int sellPrice = sellPriceFor(ctx, WC_FUNDING_LOG_NAME);
         log("Selling " + quantity + "x logs for WC funding");
-        boolean placed = ctx.grandExchange().placeSellOffer(WC_FUNDING_LOG_NAME, quantity, sellPrice);
+        boolean placed = org.example.core.items.GeSellOffer.place(ctx, WC_FUNDING_LOG_NAME, quantity, sellPrice);
         if (placed) {
-            Time.sleep(5000, 9000);
+            Time.sleep(1200, 2200);
             collectGeOffers(ctx);
             gearPurchaseDeferredUntil = 0;
             closeGrandExchangeAfterTrade(ctx, "WC funding log sale");
@@ -2917,6 +2981,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private boolean isGeTradeRestricted(APIContext ctx) {
+        if (stats.isGeTradeUnlockVerified()) {
+            return false;
+        }
         if (isBankOpen(ctx)) {
             return false;
         }
@@ -3030,10 +3097,10 @@ public class LumbridgeCowCombatModule implements F2PModule {
         if (ctx.bank().isOpen()) {
             return true;
         }
-
-        return ctx.widgets().isInterfaceOpen()
-                && (hasVisibleWidgetText(ctx, "The Bank of Gielinor")
-                || hasVisibleWidgetText(ctx, "Bank of Gielinor"));
+        int packed = com.epicbot.api.gameval.InterfaceID.Bankmain.TITLE;
+        WidgetChild title = ctx.widgets().get(packed >>> 16, packed & 0xffff);
+        return title != null && title.isValid() && title.isVisible() && !title.isHidden()
+                && title.getText() != null && title.getText().contains("Bank");
     }
 
     private void closeBank(APIContext ctx) {
@@ -3153,11 +3220,23 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private void collectGeOffers(APIContext ctx) {
+        var screen = ctx.grandExchange().getCurrentScreen();
+        if (screen == com.epicbot.api.shared.methods.IGrandExchangeAPI.GrandExchangeScreen.SETUP_SELL_OFFER
+                || screen == com.epicbot.api.shared.methods.IGrandExchangeAPI.GrandExchangeScreen.SETUP_BUY_OFFER) return;
         try {
+            boolean ready = false;
+            for (com.epicbot.api.shared.model.ge.GrandExchangeSlot slot : ctx.grandExchange().getSlots()) {
+                if (slot == null || slot.getOffer() == null || !slot.canCollect()) continue;
+                var state = slot.getState();
+                if (state == com.epicbot.api.shared.model.ge.GrandExchangeOffer.OfferState.SOLD
+                        || state == com.epicbot.api.shared.model.ge.GrandExchangeOffer.OfferState.BOUGHT) {
+                    ready = true;
+                    break;
+                }
+            }
+            if (!ready) return;
             ctx.grandExchange().collectToInventory();
-            Time.sleep(600, 900);
-            ctx.grandExchange().collectToBank();
-            Time.sleep(600, 900);
+            Time.sleep(250, 450);
         } catch (RuntimeException ignored) {
             // GE collection can fail when no offer is ready.
         }
@@ -3185,7 +3264,9 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private void markFundingItemBlockedByGe(APIContext ctx, String itemName) {
-        geBlockedFundingItems.add(normalizedName(itemName));
+        stats.setGeRestricted(true);
+        geBlockedFundingItems.put(normalizedName(itemName),
+                System.currentTimeMillis() + 30L * 60_000L);
         activeFundingDecision = null;
         log("GE restriction applies to " + itemName + "; avoiding this item and trying another funding stock");
 
@@ -3202,7 +3283,36 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private boolean isFundingItemBlockedByGe(String itemName) {
-        return geBlockedFundingItems.contains(normalizedName(itemName));
+        Long until = geBlockedFundingItems.get(normalizedName(itemName));
+        return until != null && System.currentTimeMillis() < until;
+    }
+
+    private boolean isPostUnlockFundingItem(String itemName) {
+        for (String candidate : POST_UNLOCK_FUNDING_ITEMS) {
+            if (namesMatch(candidate, itemName)) return true;
+        }
+        return false;
+    }
+
+    private boolean hasAcceptedSellOffer(APIContext ctx, String itemName) {
+        for (com.epicbot.api.shared.model.ge.GrandExchangeSlot slot : ctx.grandExchange().getSlots()) {
+            if (slot == null || slot.getOffer() == null
+                    || !namesMatch(slot.getOffer().getItemName(), itemName)) continue;
+            com.epicbot.api.shared.model.ge.GrandExchangeOffer.OfferState state = slot.getState();
+            if (state == com.epicbot.api.shared.model.ge.GrandExchangeOffer.OfferState.SELLING
+                    || state == com.epicbot.api.shared.model.ge.GrandExchangeOffer.OfferState.SOLD) return true;
+        }
+        return false;
+    }
+
+    private boolean hasActiveGearBuyOffer(APIContext ctx) {
+        if (pendingGearPurchase == null) return false;
+        for (com.epicbot.api.shared.model.ge.GrandExchangeSlot slot : ctx.grandExchange().getSlots()) {
+            if (slot == null || slot.getOffer() == null
+                    || !namesMatch(slot.getOffer().getItemName(), pendingGearPurchase.name)) continue;
+            if (slot.getState() == com.epicbot.api.shared.model.ge.GrandExchangeOffer.OfferState.BUYING) return true;
+        }
+        return false;
     }
 
     private boolean withdrawFundingItemFromBank(APIContext ctx) {
@@ -3238,52 +3348,16 @@ public class LumbridgeCowCombatModule implements F2PModule {
             return true;
         }
 
-        log("Withdrawing " + count + "x " + itemName + " to sell for " + fundingTargetName());
-        if (ctx.bank().withdrawAll(itemName)
-                || ctx.bank().withdraw(count, itemName)
+        int quantity = count;
+        log("Withdrawing " + quantity + "x " + itemName + " to sell for " + fundingTargetName());
+        if (ctx.bank().withdraw(quantity, itemName)
+                || (quantity >= count && (ctx.bank().withdrawAll(itemName)
                 || ctx.bank().interactItem("Withdraw-All", itemName)
-                || ctx.bank().interactItem("Withdraw All", itemName)) {
+                || ctx.bank().interactItem("Withdraw All", itemName)))) {
             Time.sleep(600, 900);
             ctx.bank().close();
             Time.sleep(600, 900);
             return true;
-        }
-
-        return false;
-    }
-
-    private boolean withdrawObsoleteGearFromBank(APIContext ctx) {
-        if (!ctx.bank().isOpen()
-                || (pendingGearPurchase != null && !pendingGearPurchaseOptional)) {
-            return false;
-        }
-
-        for (String itemName : obsoleteGearSaleItemNames(ctx)) {
-            if (isFundingItemBlockedByGe(itemName)) {
-                continue;
-            }
-            int count = fundingItemCountInBank(ctx, itemName);
-            if (count <= 0) {
-                continue;
-            }
-
-            if (!ctx.bank().isWithdrawMode(IBankAPI.WithdrawMode.NOTE)) {
-                log("Selecting noted withdraw mode for old tier gear: " + itemName);
-                ctx.bank().selectWithdrawMode(IBankAPI.WithdrawMode.NOTE);
-                Time.sleep(600, 900, () -> ctx.bank().isWithdrawMode(IBankAPI.WithdrawMode.NOTE), 100);
-                return true;
-            }
-
-            log("Withdrawing old tier gear to sell: " + count + "x " + itemName);
-            if (ctx.bank().withdrawAll(itemName)
-                    || ctx.bank().withdraw(count, itemName)
-                    || ctx.bank().interactItem("Withdraw-All", itemName)
-                    || ctx.bank().interactItem("Withdraw All", itemName)) {
-                Time.sleep(600, 900);
-                ctx.bank().close();
-                Time.sleep(600, 900);
-                return true;
-            }
         }
 
         return false;
@@ -3332,9 +3406,10 @@ public class LumbridgeCowCombatModule implements F2PModule {
     private boolean hasNonSellableFundingItemInInventory(APIContext ctx) {
         for (ItemWidget item : ctx.inventory().getItems()) {
             if (item != null
+                    && matchesAny(item.getName(), NON_SELLABLE_FUNDING_ITEMS)
                     && !isCombatFoodName(item.getName())
                     && !isKnownCombatGearName(item.getName())
-                    && matchesAny(item.getName(), NON_SELLABLE_FUNDING_ITEMS)) {
+                    && !isFundingItemName(ctx, item.getName())) {
                 return true;
             }
         }
@@ -3406,16 +3481,6 @@ public class LumbridgeCowCombatModule implements F2PModule {
         return null;
     }
 
-    private String firstObsoleteGearInventoryItem(APIContext ctx) {
-        for (String itemName : obsoleteGearSaleItemNames(ctx)) {
-            if (!isFundingItemBlockedByGe(itemName)
-                    && inventoryFundingItemCount(ctx, itemName) > 0) {
-                return itemName;
-            }
-        }
-        return null;
-    }
-
     private int inventoryFundingItemCount(APIContext ctx, String itemName) {
         int count = 0;
         for (ItemWidget item : ctx.inventory().getItems()) {
@@ -3428,12 +3493,21 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
     private List<String> fundingItemNames(APIContext ctx) {
         List<String> names = new ArrayList<>();
+        boolean bankOpen = ctx.bank().isOpen();
         for (String itemName : GEAR_FUNDING_ITEMS) {
             addFundingItemName(names, itemName);
         }
+        if (hasTradeProgressPrerequisites(ctx)) {
+            for (String itemName : POST_UNLOCK_FUNDING_ITEMS) {
+                if (inventoryFundingItemCount(ctx, itemName) > 0
+                        || (bankOpen && fundingItemCountInBank(ctx, itemName) > 0)) {
+                    addFundingItemName(names, itemName, true);
+                }
+            }
+        }
         for (String itemName : obsoleteGearSaleItemNames(ctx)) {
             if (inventoryFundingItemCount(ctx, itemName) > 0
-                    || (isBankOpen(ctx) && fundingItemCountInBank(ctx, itemName) > 0)) {
+                    || (bankOpen && fundingItemCountInBank(ctx, itemName) > 0)) {
                 addFundingItemName(names, itemName);
             }
         }
@@ -3488,10 +3562,14 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private void addFundingItemName(List<String> names, String itemName) {
+        addFundingItemName(names, itemName, false);
+    }
+
+    private void addFundingItemName(List<String> names, String itemName, boolean postUnlockCandidate) {
         if (itemName == null || itemName.isBlank()) {
             return;
         }
-        if (!F2PItemRegistry.isGeSellable(itemName)) {
+        if (!postUnlockCandidate && !F2PItemRegistry.isGeSellable(itemName)) {
             return;
         }
         for (String existing : names) {
@@ -3502,7 +3580,28 @@ public class LumbridgeCowCombatModule implements F2PModule {
         names.add(itemName);
     }
 
+    private boolean hasTradeProgressPrerequisites(APIContext ctx) {
+        if (stats.isGeTradeUnlockVerified() || tradePrerequisitesMet) return true;
+        if (System.currentTimeMillis() < tradePrerequisitesCheckedUntil) return false;
+        tradePrerequisitesCheckedUntil = System.currentTimeMillis() + 60_000L;
+        if (ctx.quests().getQuestPoints() < 10) return false;
+        int total = 0;
+        for (Skill.Skills skill : Skill.Skills.values()) {
+            try {
+                total += ctx.skills().get(skill).getRealLevel();
+            } catch (RuntimeException ignored) {
+                // Future client skills may not be readable.
+            }
+        }
+        tradePrerequisitesMet = total >= 100;
+        return tradePrerequisitesMet;
+    }
+
     private int buyPriceFor(APIContext ctx, String itemName) {
+        int knownGearPrice = F2PItemRegistry.buyPrice(itemName);
+        if (!isRangedArrow(itemName) && knownGearPrice > 0) {
+            return Math.max(100, knownGearPrice * 2);
+        }
         long minimum = isRangedArrow(itemName) ? 8L : 100L;
         return GePricing.quickBuyPrice(ctx, itemName, minimum);
     }
@@ -3623,10 +3722,6 @@ public class LumbridgeCowCombatModule implements F2PModule {
             gearCheckedDefenceLevel = defenceGearBracket;
         }
 
-        if (withdrawObsoleteGearFromBank(ctx)) {
-            return true;
-        }
-
         boolean stillMissingWeapon = isEquipmentSlotEmpty(ctx, IEquipmentAPI.Slot.WEAPON)
                 && bestHeldGear(ctx, attackLevel, WEAPONS) == null;
         boolean stillMissingShield = isEquipmentSlotEmpty(ctx, IEquipmentAPI.Slot.SHIELD)
@@ -3729,10 +3824,6 @@ public class LumbridgeCowCombatModule implements F2PModule {
         }
         if (armorTrigger) {
             gearCheckedRangedArmorLevel = rangedArmorBracket;
-        }
-
-        if (withdrawObsoleteGearFromBank(ctx)) {
-            return true;
         }
 
         boolean stillMissingBow = desiredBow != null && !ownsGear(ctx, desiredBow.name);
@@ -3901,6 +3992,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
     private void setPendingGearPurchase(GearItem item, boolean optional) {
         pendingGearPurchase = item;
+        pendingGearUnitBuyPrice = 0;
         pendingGearPurchaseOptional = optional;
         pendingRangedArrowBankStock = -1;
         gearPurchaseDeferredUntil = 0;
@@ -3909,6 +4001,7 @@ public class LumbridgeCowCombatModule implements F2PModule {
 
     private void clearPendingGearPurchase() {
         pendingGearPurchase = null;
+        pendingGearUnitBuyPrice = 0;
         pendingGearPurchaseOptional = false;
         pendingRangedArrowBankStock = -1;
         gearBuyOfferPending = false;
@@ -4479,7 +4572,11 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private void buryBones(APIContext ctx) {
-        while (ctx.inventory().contains("Bones")) {
+        long stopBuryingAt = System.currentTimeMillis() + 30_000L;
+        int buriedThisTick = 0;
+        while (ctx.inventory().contains("Bones")
+                && buriedThisTick++ < 28
+                && System.currentTimeMillis() < stopBuryingAt) {
             log("Burying bones");
             if (!ctx.inventory().interactItem("Bury", "Bones")) {
                 return;
@@ -4738,28 +4835,13 @@ public class LumbridgeCowCombatModule implements F2PModule {
     }
 
     private void walkToArea(APIContext ctx, Area area, String label) {
-        walkToTile(ctx, area.getRandomTile(), label);
+        walkToTile(ctx, Navigation.destinationInArea(ctx, area), label);
     }
 
     private void walkToTile(APIContext ctx, Tile tile, String label) {
-        int roll = ThreadLocalRandom.current().nextInt(100);
-        boolean walked = false;
-        if (roll < 45 && tile.tileDistanceTo(ctx) <= 12) {
-            walked = ctx.walking().walkOnScreen(tile)
-                    || tile.interact("Walk here")
-                    || tile.click(true);
-            if (walked) {
-                log("Walking via screen to " + label);
-                return;
-            }
-        }
-
-        if (roll < 75) {
-            walked = ctx.walking().walkOnMap(tile);
-            if (walked) {
-                log("Walking via minimap to " + label);
-                return;
-            }
+        if (Navigation.walkLocally(ctx, tile)) {
+            log("Walking locally to " + label);
+            return;
         }
 
         if (shouldAvoidTeleportsForTargetWalk(label)) {

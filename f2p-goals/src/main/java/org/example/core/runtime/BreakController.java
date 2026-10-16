@@ -94,7 +94,7 @@ public class BreakController implements RuntimeController {
             if (action == 0) {
                 ctx.mouse().moveOffScreen();
             } else if (action == 1) {
-                ctx.camera().setYawDeg(randomInt(0, 360));
+                org.example.core.navigation.CameraMovement.turn(ctx, randomInt(0, 359), ctx.camera().getPitch(), logger);
             } else if (action == 2) {
                 ctx.tabs().open(ITabsAPI.Tabs.INVENTORY);
             } else {

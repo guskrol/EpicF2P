@@ -1004,9 +1004,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
     private boolean walkLocallyTo(APIContext ctx, Tile destination, String label) {
         log("Walking locally to " + label);
         int beforeDistance = destination.tileDistanceTo(ctx);
-        boolean walked = ctx.walking().walkOnScreen(destination)
-                || ctx.walking().walkToOnScreen(destination)
-                || ctx.walking().walkOnMap(destination)
+        boolean walked = org.example.core.navigation.Navigation.walkLocally(ctx, destination)
                 || ctx.walking().walkTo(destination);
         if (walked) {
             Time.sleep(700, 1200, () -> ctx.localPlayer().isMoving(), 100);
@@ -1025,6 +1023,7 @@ public class MiningSmithingModule extends AbstractSkillingModule {
         }
 
         log("Opening " + label + " before furnace approach: " + object.getName());
+        org.example.core.navigation.AccessRecovery.interaction(ctx, object, "Open/Pass");
         boolean opened = object.interact("Open")
                 || object.interact("Pass")
                 || object.interact("Walk-through")

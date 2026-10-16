@@ -38,6 +38,7 @@ public class CraftingFundingRegressionTest {
             testInventoryBankingRules(directory.resolve("inventory"));
             testMiningCleanupAndToolSetup(directory.resolve("mining"));
             testBankStockSale(directory.resolve("stock"));
+            testSellAvailableStockBeforeGrinding();
             testFundingTarget(directory.resolve("target"));
             testStalledFundingProtection(directory.resolve("stall"));
             testWatchdogReroll(directory.resolve("watchdog"));
@@ -49,6 +50,18 @@ public class CraftingFundingRegressionTest {
                 for (Path file : files.sorted(Comparator.reverseOrder()).toList()) Files.delete(file);
             }
         }
+    }
+
+    private static void testSellAvailableStockBeforeGrinding() {
+        FundingPlanner planner = new FundingPlanner();
+        FundingPlanner.Decision partial = planner.choose(1_000, 100, List.of(
+                new FundingPlanner.Asset("Bronze bar", 0, 2, 170)));
+        require(partial.method() == FundingPlanner.Method.SELL_READY_STOCK,
+                "Banked stock below the full shortage must be sold before gathering more gold");
+        require(planner.choose(1_000, 1_200, List.of(
+                new FundingPlanner.Asset("Bronze bar", 0, 2, 170))).method()
+                == FundingPlanner.Method.SELL_READY_STOCK,
+                "Remaining eligible stock must still be selected after the coin target is reached");
     }
 
     private static void testBeerGlassCleanup(Path directory) throws Exception {
@@ -124,6 +137,8 @@ public class CraftingFundingRegressionTest {
         scenario.module.execute(scenario.ctx);
         require("Beer glass".equals(getField(scenario.module, "pendingFundingSellItem")),
                 "Banked funding stock must still be audited and selected for sale");
+        require((int) getField(scenario.module, "pendingFundingSellQuantity") == 300,
+                "The full eligible stack should be listed, not only the shortage quantity");
         require(scenario.method() == FundingPlanner.Method.SELL_READY_STOCK,
                 "Completing bank cleanup must not bypass the funding stock sale");
     }
@@ -211,8 +226,16 @@ public class CraftingFundingRegressionTest {
             setField(module, "activeFundingDecision", new FundingPlanner.Decision(method, "stock", 0, 0, 0L));
             setField(module, "activeFundingTargetItem", "Leather");
             setField(module, "activeFundingTargetCoins", 10000);
-            ctx = proxy(APIContext.class, (object, apiMethod, apiArguments) ->
-                    proxy(apiMethod.getReturnType(), (api, methodCall, arguments) -> {
+            ctx = proxy(APIContext.class, (object, apiMethod, apiArguments) -> {
+                    if (apiMethod.getDeclaringClass() == Object.class) {
+                        return switch (apiMethod.getName()) {
+                            case "hashCode" -> System.identityHashCode(object);
+                            case "equals" -> object == apiArguments[0];
+                            case "toString" -> "CraftingFundingContext";
+                            default -> null;
+                        };
+                    }
+                    return proxy(apiMethod.getReturnType(), (api, methodCall, arguments) -> {
                         String surface = apiMethod.getName();
                         String action = methodCall.getName();
                         Map<String, Integer> items = surface.equals("bank") ? bank : inventory;
@@ -258,7 +281,8 @@ public class CraftingFundingRegressionTest {
                         }
                         if (action.equals("getAllChildren")) return List.of();
                         return defaultValue(methodCall.getReturnType());
-                    }));
+                    });
+            });
         }
 
         private FundingPlanner.Method method() throws Exception {

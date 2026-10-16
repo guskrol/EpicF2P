@@ -3,7 +3,7 @@ package org.example;
 import com.epicbot.api.shared.GameType;
 import com.epicbot.api.shared.APIContext;
 import com.epicbot.api.shared.event.ChatMessageEvent;
-import com.epicbot.api.shared.script.Script;
+import org.example.core.AccessAwareScript;
 import com.epicbot.api.shared.script.ScriptManifest;
 import com.epicbot.api.shared.model.Skill;
 import org.example.core.F2PModule;
@@ -11,12 +11,15 @@ import org.example.core.ManagedF2PModule;
 import org.example.core.ModuleTask;
 import org.example.core.ScriptStats;
 import org.example.core.SkillCapManager;
+import org.example.core.navigation.Navigation;
 import org.example.core.runtime.AntibanController;
 import org.example.core.runtime.AccountSkillCapController;
 import org.example.core.runtime.AlKharidGateDialogueController;
-import org.example.core.runtime.BreakController;
+import org.example.core.runtime.BreakSettingsDialog;
+import org.example.core.runtime.ScheduledBreakController;
 import org.example.core.runtime.CameraZoomController;
 import org.example.core.runtime.DeathRecoveryController;
+import org.example.core.runtime.BrutusRecoveryController;
 import org.example.core.runtime.LoopWatchdogController;
 import org.example.core.runtime.RuntimeController;
 import org.example.core.runtime.WorldHopController;
@@ -27,7 +30,13 @@ import org.example.modules.combat.RangedCombatTrainingModule;
 import org.example.modules.magic.MagicCombatTrainingModule;
 import org.example.modules.moneymaking.BeerGlassCollectorModule;
 import org.example.modules.questing.CookAssistantQuestModule;
+import org.example.modules.questing.DemonSlayerQuestModule;
+import org.example.modules.questing.DoricQuestModule;
+import org.example.modules.questing.IdesOfMilkQuestModule;
+import org.example.modules.questing.KnightsSwordQuestModule;
+import org.example.modules.questing.RomeoJulietQuestModule;
 import org.example.modules.questing.RuneMysteriesQuestModule;
+import org.example.modules.questing.XMarksTheSpotQuestModule;
 import org.example.modules.skilling.CraftingModule;
 import org.example.modules.skilling.FishingCookingModule;
 import org.example.modules.skilling.MiningSmithingModule;
@@ -36,11 +45,14 @@ import com.epicbot.api.shared.util.paint.PaintContext;
 
 import java.awt.Color;
 import java.awt.Rectangle;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @ScriptManifest(name = "F2P Goals", gameType = GameType.OS)
-public class F2PGoalsScript extends Script {
-    private static final String SCRIPT_VERSION = "v0.4.267-crafting-funding-bank-fix";
+public class F2PGoalsScript extends AccessAwareScript {
+    private static final String SCRIPT_VERSION = "v0.4.419-death-inventory-confirmation";
     private static final boolean QUEST_TEST_ONLY = false;
     private static final boolean RANGED_TEST_ONLY = false;
     private static final boolean MAGIC_TEST_ONLY = false;
@@ -52,9 +64,15 @@ public class F2PGoalsScript extends Script {
 
     private ScriptStats stats;
     private SkillCapManager skillCaps;
+    private ScheduledBreakController scheduledBreaks;
+    private final Map<String, Long> routineLogTimes = new LinkedHashMap<>();
 
     @Override
     public boolean onStart(String... args) {
+        routineLogTimes.clear();
+        Boolean breaksEnabled = BreakSettingsDialog.choose();
+        if (breaksEnabled == null) return false;
+        Navigation.reset(getAPIContext());
         stats = new ScriptStats();
         skillCaps = new SkillCapManager();
         FishingCookingModule fishingCookingModule = new FishingCookingModule(
@@ -87,6 +105,15 @@ public class F2PGoalsScript extends Script {
                 this::logInfo,
                 stats
         );
+        KnightsSwordQuestModule knightsSwordQuestModule = new KnightsSwordQuestModule(
+                this::logInfo,
+                stats
+        );
+        DoricQuestModule doricQuestModule = new DoricQuestModule(this::logInfo, stats);
+        DemonSlayerQuestModule demonSlayerQuestModule = new DemonSlayerQuestModule(this::logInfo, stats);
+        RomeoJulietQuestModule romeoJulietQuestModule = new RomeoJulietQuestModule(this::logInfo, stats);
+        IdesOfMilkQuestModule idesOfMilkQuestModule = new IdesOfMilkQuestModule(this::logInfo, stats);
+        XMarksTheSpotQuestModule xMarksTheSpotQuestModule = new XMarksTheSpotQuestModule(this::logInfo, stats);
         List<ManagedF2PModule> managedModules;
         F2PModule fallbackModule;
 
@@ -127,6 +154,13 @@ public class F2PGoalsScript extends Script {
                     skillCaps
             );
             managedModules = List.of(
+                    doricQuestModule,
+                    cookAssistantQuestModule,
+                    demonSlayerQuestModule,
+                    romeoJulietQuestModule,
+                    xMarksTheSpotQuestModule,
+                    idesOfMilkQuestModule,
+                    knightsSwordQuestModule,
                     new CombatTrainingModule(combatModule, skillCaps),
                     new RangedCombatTrainingModule(rangedCombatModule, skillCaps),
                     magicModule,
@@ -169,30 +203,39 @@ public class F2PGoalsScript extends Script {
                 fallbackModule
         );
         boolean lightweightTestMode = QUEST_TEST_ONLY || CRAFTING_TEST_ONLY;
-        List<RuntimeController> runtimeModules = lightweightTestMode
+        LumbridgeCowCombatModule brutusCombat = fallbackModule instanceof LumbridgeCowCombatModule combat
+                && !RANGED_TEST_ONLY ? combat : null;
+        LoopWatchdogController watchdog = new LoopWatchdogController(
+                this::logInfo, stats, SCRIPT_VERSION, goalManagerModule::requestReroll);
+        scheduledBreaks = breaksEnabled
+                ? new ScheduledBreakController(this::logInfo, goalManagerModule, watchdog, stats) : null;
+        logInfo("[Break] System " + (breaksEnabled ? "enabled" : "disabled"));
+        List<RuntimeController> runtimeModules = new ArrayList<>(lightweightTestMode
                 ? List.of(
                         new AccountSkillCapController(skillCaps, stats, this::logInfo),
-                        new DeathRecoveryController(this::logInfo, stats),
+                        new DeathRecoveryController(this::logInfo, stats,
+                                brutusCombat == null ? () -> { } : brutusCombat::onDeathDetected),
                         new AlKharidGateDialogueController(this::logInfo, stats),
-                        new LoopWatchdogController(this::logInfo, stats, SCRIPT_VERSION, goalManagerModule::requestReroll),
+                        watchdog,
                         new CameraZoomController(this::logInfo)
                 )
                 : List.of(
                         new AccountSkillCapController(skillCaps, stats, this::logInfo),
-                        new DeathRecoveryController(this::logInfo, stats),
+                        new DeathRecoveryController(this::logInfo, stats,
+                                brutusCombat == null ? () -> { } : brutusCombat::onDeathDetected),
                         new AlKharidGateDialogueController(this::logInfo, stats),
-                        new LoopWatchdogController(this::logInfo, stats, SCRIPT_VERSION, goalManagerModule::requestReroll),
+                        watchdog,
                         new CameraZoomController(this::logInfo),
-                        BreakController.normal(this::logInfo, stats),
-                        BreakController.micro(this::logInfo, stats),
                         new WorldHopController(this::logInfo),
                         new AntibanController(this::logInfo)
-                );
+                ));
+        if (brutusCombat != null) runtimeModules.add(2, new BrutusRecoveryController(brutusCombat));
         addTask(new ModuleTask(
                 this::getAPIContext,
                 this::logInfo,
                 runtimeModules,
-                List.of(goalManagerModule)
+                List.of(goalManagerModule),
+                scheduledBreaks
         ));
         return true;
     }
@@ -202,6 +245,7 @@ public class F2PGoalsScript extends Script {
         if (stats == null || event == null || event.getMessage() == null) {
             return;
         }
+        super.onChatMessage(event);
 
         String message = event.getMessage()
                 .toLowerCase()
@@ -230,7 +274,16 @@ public class F2PGoalsScript extends Script {
             return;
         }
 
+        if (!ctx.client().isLoggedIn()) {
+            String breakText = scheduledBreaks == null ? "Waiting for login" : scheduledBreaks.hud();
+            paint.fill(new Rectangle(8, 8, 318, 62), new Color(12, 15, 20, 188));
+            paint.drawText("F2P Goals " + SCRIPT_VERSION, 20, 29, Color.WHITE, 12);
+            paint.drawText(breakText.isBlank() ? "Waiting for login" : breakText,
+                    20, 51, new Color(241, 211, 118), 11);
+            return;
+        }
         stats.startExperienceIfNeeded(ctx);
+        stats.restoreGeTradeUnlock(ctx);
 
         boolean hasFunding = hasValue(stats.lastFundingReason());
         boolean hasFundingProgress = stats.fundingTargetGp() > 0L;
@@ -239,7 +292,9 @@ public class F2PGoalsScript extends Script {
         int x = 8;
         int y = 8;
         int width = 318;
-        int height = 229
+        boolean hasBreak = scheduledBreaks != null && !scheduledBreaks.hud().isBlank();
+        int height = 244
+                + (hasBreak ? 15 : 0)
                 + (hasFunding ? 15 : 0)
                 + (hasFundingProgress ? 15 : 0)
                 + (hasError ? 15 : 0)
@@ -269,6 +324,10 @@ public class F2PGoalsScript extends Script {
         paint.drawText("Time: run " + stats.runtimeText()
                 + " | left " + stats.goalRemainingText(), x + 12, line, muted, 11);
 
+        if (hasBreak) {
+            line += 15;
+            paint.drawText("Break: " + scheduledBreaks.hud(), x + 12, line, gold, 11);
+        }
         line += 20;
         paint.drawText("Skills", x + 12, line, accent, 11);
         line += 15;
@@ -284,11 +343,18 @@ public class F2PGoalsScript extends Script {
         line += 20;
         paint.drawText("Economy", x + 12, line, accent, 11);
         line += 15;
-        paint.drawText("GE " + (stats.isGeRestricted() ? "restricted" : "available")
+        paint.drawText("GE trade " + stats.geTradeStatus()
                 + " | XP " + stats.xpGained(ctx) + " (" + stats.xpPerHour(ctx) + "/h)", x + 12, line, primary, 11);
         line += 15;
         paint.drawText("Gold " + stats.estimatedGold() + " (" + stats.goldPerHour() + "/h)"
                 + " | Coins +" + stats.coinsLooted(), x + 12, line, gold, 11);
+        line += 15;
+        long displayedCoins = stats.fundingTargetGp() > 0L
+                ? stats.fundingCurrentGp() : ctx.inventory().getCount(true, "Coins");
+        long rangedMissing = Math.max(0L, stats.fundingTargetGp() - displayedCoins);
+        paint.drawText((stats.fundingTargetGp() > 0L ? "Coins total " : "Coins inv ") + displayedCoins
+                + (stats.fundingTargetGp() > 0L ? " | falta " + rangedMissing : ""),
+                x + 12, line, gold, 11);
         line += 15;
         paint.drawText("Loot hides " + stats.cowhidesLooted()
                 + " | items " + stats.itemsLooted()
@@ -318,13 +384,21 @@ public class F2PGoalsScript extends Script {
 
     @Override
     protected void onStop() {
+        Navigation.cancel(getAPIContext());
+        if (scheduledBreaks != null) scheduledBreaks.restoreLogin();
         clearClientInteractionState();
         getLogger().info("F2P Goals " + SCRIPT_VERSION + " stopped");
     }
 
     @Override
     protected void onPause() {
+        Navigation.cancel(getAPIContext());
         clearClientInteractionState();
+    }
+
+    @Override
+    protected void onResume() {
+        Navigation.reset(getAPIContext());
     }
 
     private void clearClientInteractionState() {
@@ -346,10 +420,31 @@ public class F2PGoalsScript extends Script {
     }
 
     private void logInfo(String message) {
+        if (suppressRoutineLog(message)) return;
         if (stats != null) {
             stats.recordRelevantLog(message);
         }
         getLogger().info(message);
+    }
+
+    private synchronized boolean suppressRoutineLog(String message) {
+        if (message == null) return false;
+        String lower = message.toLowerCase(java.util.Locale.ROOT);
+        if (lower.contains("failed") || lower.contains("error") || lower.contains("stalled")
+                || lower.contains("blocked") || lower.contains("refus") || lower.contains("unavailable")
+                || lower.contains("no valid") || lower.contains("no_valid")) return false;
+        boolean routine = lower.startsWith("walking ") || lower.startsWith("preparing ")
+                || lower.contains("fundingplanner ") || lower.contains("funding pool running ")
+                || lower.contains("funding running ") || lower.startsWith("combat decision:")
+                || lower.equals("combat tick entered") || lower.startsWith("running goal module:");
+        if (!routine) return false;
+        long now = System.currentTimeMillis();
+        Long lastAt = routineLogTimes.get(message);
+        if (lastAt != null && now - lastAt < 15000L) return true;
+        if (routineLogTimes.size() >= 256 && lastAt == null)
+            routineLogTimes.remove(routineLogTimes.keySet().iterator().next());
+        routineLogTimes.put(message, now);
+        return false;
     }
 
     private String gatheringCapText(APIContext ctx) {
@@ -415,3 +510,4 @@ public class F2PGoalsScript extends Script {
         return value.substring(0, Math.max(1, maxChars - 3)) + "...";
     }
 }
+

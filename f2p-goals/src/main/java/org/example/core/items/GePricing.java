@@ -2,10 +2,17 @@ package org.example.core.items;
 
 import com.epicbot.api.shared.APIContext;
 import com.epicbot.api.shared.model.ItemDetail;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
 
 public final class GePricing {
     private static final double QUICK_BUY_MARKUP = 1.15D;
     private static final double QUICK_SELL_MARKDOWN = 0.85D;
+    private static final long MARKET_CACHE_MILLIS = 3L * 60_000L;
+    private static final Map<String, MarketPrice> marketPrices = new HashMap<>();
+
+    private record MarketPrice(long price, long expiresAt) {}
 
     private GePricing() {
     }
@@ -75,42 +82,57 @@ public final class GePricing {
     }
 
     private static long marketBuyReference(APIContext ctx, String itemName) {
+        Long cached = cachedMarketPrice("buy:", itemName);
+        if (cached != null) return cached;
         long wiki = wikiBuyReference(itemName);
         if (wiki > 0L) {
-            return wiki;
+            return rememberMarketPrice("buy:", itemName, wiki);
         }
 
         if (F2PItemRegistry.hasFixedStackableBuyPrice(itemName)) {
-            return 0L;
+            return rememberMarketPrice("buy:", itemName, 0L);
         }
 
         ItemDetail detail = itemDetail(ctx, itemName);
         if (detail == null) {
-            return 0L;
+            return rememberMarketPrice("buy:", itemName, 0L);
         }
 
         int price = firstPositive(detail.getHighestPrice(), detail.getLowestPrice());
         if (price > 0 && detail.isEquipable() && detail.getHighAlch() > 0) {
             price = (int) Math.min(price, (long) detail.getHighAlch() * 3L);
         }
-        return price;
+        return rememberMarketPrice("buy:", itemName, price);
     }
 
     private static long marketSellReference(APIContext ctx, String itemName) {
+        Long cached = cachedMarketPrice("sell:", itemName);
+        if (cached != null) return cached;
         long wiki = wikiSellReference(itemName);
         if (wiki > 0L) {
-            return wiki;
+            return rememberMarketPrice("sell:", itemName, wiki);
         }
 
         ItemDetail detail = itemDetail(ctx, itemName);
         if (detail == null) {
-            return 0L;
+            return rememberMarketPrice("sell:", itemName, 0L);
         }
 
         int price = firstPositive(detail.getLowestPrice(), detail.getHighestPrice());
         if (price > 0 && detail.isEquipable() && detail.getHighAlch() > 0) {
             price = (int) Math.min(price, (long) detail.getHighAlch() * 3L);
         }
+        return rememberMarketPrice("sell:", itemName, price);
+    }
+
+    private static synchronized Long cachedMarketPrice(String side, String itemName) {
+        MarketPrice cached = marketPrices.get(side + itemName.toLowerCase(Locale.ROOT));
+        return cached != null && System.currentTimeMillis() < cached.expiresAt() ? cached.price() : null;
+    }
+
+    private static synchronized long rememberMarketPrice(String side, String itemName, long price) {
+        marketPrices.put(side + itemName.toLowerCase(Locale.ROOT),
+                new MarketPrice(price, System.currentTimeMillis() + MARKET_CACHE_MILLIS));
         return price;
     }
 

@@ -27,6 +27,8 @@ public final class WikiPriceClient {
     private static Map<Integer, Price> latestPricesById = new HashMap<>();
     private static long mappingFetchedAt;
     private static long latestFetchedAt;
+    private static long mappingRetryAfter;
+    private static long latestRetryAfter;
 
     private WikiPriceClient() {
     }
@@ -52,6 +54,7 @@ public final class WikiPriceClient {
 
     private static void refreshMappingIfNeeded() {
         long now = System.currentTimeMillis();
+        if (now < mappingRetryAfter) return;
         if (!itemIdsByName.isEmpty() && now - mappingFetchedAt < MAPPING_CACHE_MILLIS) {
             return;
         }
@@ -64,11 +67,13 @@ public final class WikiPriceClient {
             }
         } catch (RuntimeException ignored) {
             // Keep stale cache when the Wiki is unreachable.
+            mappingRetryAfter = now + 5L * 60_000L;
         }
     }
 
     private static void refreshLatestIfNeeded() {
         long now = System.currentTimeMillis();
+        if (now < latestRetryAfter) return;
         if (!latestPricesById.isEmpty() && now - latestFetchedAt < LATEST_CACHE_MILLIS) {
             return;
         }
@@ -81,6 +86,7 @@ public final class WikiPriceClient {
             }
         } catch (RuntimeException ignored) {
             // Keep stale cache when the Wiki is unreachable.
+            latestRetryAfter = now + 5L * 60_000L;
         }
     }
 
@@ -88,8 +94,8 @@ public final class WikiPriceClient {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
-            connection.setConnectTimeout(5_000);
-            connection.setReadTimeout(5_000);
+            connection.setConnectTimeout(1_200);
+            connection.setReadTimeout(1_200);
             connection.setRequestProperty("User-Agent", USER_AGENT);
             connection.setRequestProperty("Accept", "application/json");
 

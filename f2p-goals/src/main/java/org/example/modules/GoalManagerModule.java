@@ -8,6 +8,7 @@ import org.example.core.F2PModule;
 import org.example.core.ManagedF2PModule;
 import org.example.core.ScriptStats;
 import org.example.core.navigation.Navigation;
+import org.example.modules.questing.RomeoJulietQuestModule;
 
 import java.awt.event.KeyEvent;
 import java.util.ArrayList;
@@ -32,10 +33,15 @@ public class GoalManagerModule implements F2PModule {
     private final F2PModule fallbackModule;
     private ManagedF2PModule activeModule;
     private long activeUntil;
+    private long pausedGoalRemaining = -1L;
     private long nextActiveModuleLogAt;
     private boolean inventoryCleanupPending = true;
     private String inventoryCleanupTarget = "initial goal";
     private int inventoryCleanupDepositAttempts;
+    private int inventoryCleanupDialogueAttempts;
+    private String inventoryCleanupDialogueSnapshot = "";
+    private boolean inventoryCleanupDialogueExhausted;
+    private int inventoryCleanupInterfaceAttempts;
     private final Map<String, Long> watchdogCooldowns = new HashMap<>();
     private boolean watchdogRerollRequested;
     private String watchdogRerollReason;
@@ -70,8 +76,31 @@ public class GoalManagerModule implements F2PModule {
                 : reason;
     }
 
+    public void pauseForBreak() {
+        if (pausedGoalRemaining >= 0L) return;
+        pausedGoalRemaining = activeModule == null ? 0L : Math.max(0L, activeUntil - System.currentTimeMillis());
+        stats.pauseGoalTimer(pausedGoalRemaining);
+        logger.accept("[Break] Task paused: " + stats.currentTask()
+                + "; reroll remaining " + (pausedGoalRemaining / 1000L) + " seconds");
+    }
+
+    public void resumeAfterBreak() {
+        if (pausedGoalRemaining < 0L) return;
+        if (activeModule != null) {
+            activeUntil = System.currentTimeMillis() + pausedGoalRemaining;
+            stats.setGoal(displayGoalName(activeModule.name()), activeUntil);
+        }
+        pausedGoalRemaining = -1L;
+        stats.resumeGoalTimer();
+    }
+
     @Override
     public void execute(APIContext ctx) {
+        if (activeModule != null && org.example.core.navigation.AccessRecovery.isScopeBlocked(ctx, activeModule.name())) {
+            log("Access refused repeatedly for " + displayGoalName(activeModule.name())
+                    + "; selecting a different available goal");
+            chooseNextGoal(ctx, true);
+        }
         if (watchdogRerollRequested) {
             if (activeModule != null && activeModule.isProtectedSubphase(ctx)) {
                 String reason = currentWatchdogRerollReason();
@@ -85,6 +114,11 @@ public class GoalManagerModule implements F2PModule {
 
         boolean timedOut = activeModule != null && System.currentTimeMillis() >= activeUntil;
         boolean completed = activeModule != null && activeModule.isComplete(ctx);
+        if (completed && activeModule instanceof RomeoJulietQuestModule romeo
+                && !romeo.completionHandled()) {
+            activeModule.executeWithContext(ctx);
+            return;
+        }
         if (completed && closeCompletedGoalScreen(ctx, activeModule)) {
             return;
         }
@@ -102,15 +136,25 @@ public class GoalManagerModule implements F2PModule {
         }
 
         if (activeModule != null) {
+            org.example.core.navigation.AccessRecovery.beginScope(ctx, activeModule.name());
+            if ("quests.ides_of_milk".equals(activeModule.name())
+                    && ctx.inventory().contains(com.epicbot.api.gameval.ItemID.COWBOSS_REWARD_LAMP)) {
+                clearInventoryCleanup();
+            }
             if (ensureCleanInventoryBeforeGoal(ctx, displayGoalName(activeModule.name()))) {
                 return;
             }
 
             logActiveModuleTick();
-            activeModule.execute(ctx);
+            activeModule.executeWithContext(ctx);
             return;
         }
 
+        if (org.example.core.navigation.AccessRecovery.isScopeBlocked(ctx, fallbackModule.name())) {
+            stats.setStatus("Fallback unavailable after access refusals; waiting for another eligible goal");
+            return;
+        }
+        org.example.core.navigation.AccessRecovery.beginScope(ctx, fallbackModule.name());
         if (ensureCleanInventoryBeforeGoal(ctx, displayGoalName(fallbackModule.name()))) {
             return;
         }
@@ -120,6 +164,15 @@ public class GoalManagerModule implements F2PModule {
 
     private boolean closeCompletedGoalScreen(APIContext ctx, ManagedF2PModule completedModule) {
         String goalName = displayGoalName(completedModule.name());
+
+        if (completedModule.name().startsWith("quests.")
+                && (hasVisibleWidgetText(ctx, "quest complete")
+                || hasVisibleWidgetText(ctx, "you have completed"))) {
+            log(goalName + " complete; closing quest completion screen");
+            if (!ctx.widgets().closeInterface()) ctx.keyboard().sendKey(KeyEvent.VK_ESCAPE);
+            Time.sleep(450, 800);
+            return true;
+        }
 
         if (ctx.bank().isOpen()) {
             log(goalName + " complete; closing bank before next goal");
@@ -166,7 +219,8 @@ public class GoalManagerModule implements F2PModule {
         List<ManagedF2PModule> candidates = new ArrayList<>();
         boolean skippedCooldownCandidate = false;
         for (ManagedF2PModule module : skillingModules) {
-            if (!module.isComplete(ctx) && module.shouldExecute(ctx)) {
+            if (!org.example.core.navigation.AccessRecovery.isScopeBlocked(ctx, module.name())
+                    && !module.isComplete(ctx) && module.shouldExecute(ctx)) {
                 if (isOnWatchdogCooldown(module)) {
                     skippedCooldownCandidate = true;
                     continue;
@@ -193,6 +247,7 @@ public class GoalManagerModule implements F2PModule {
             skippedPrevious = true;
         }
 
+        candidates = chooseCategoryCandidates(candidates, ThreadLocalRandom.current().nextBoolean());
         candidates.sort(Comparator.comparingInt((ManagedF2PModule module) -> module.priority(ctx)).reversed());
         int bestPriority = candidates.get(0).priority(ctx);
         List<ManagedF2PModule> bestCandidates = new ArrayList<>();
@@ -215,6 +270,20 @@ public class GoalManagerModule implements F2PModule {
         if (previous != activeModule || avoidPreviousAfterTimeout) {
             log(selectionLog(ctx, activeModule, goalWindowMillis, skippedPrevious, previous));
         }
+    }
+
+    static List<ManagedF2PModule> chooseCategoryCandidates(
+            List<ManagedF2PModule> candidates, boolean chooseQuesting
+    ) {
+        List<ManagedF2PModule> quests = new ArrayList<>();
+        List<ManagedF2PModule> combatAndSkills = new ArrayList<>();
+        for (ManagedF2PModule module : candidates) {
+            if (module.name().startsWith("quests.")) quests.add(module);
+            else combatAndSkills.add(module);
+        }
+        if (quests.isEmpty()) return combatAndSkills;
+        if (combatAndSkills.isEmpty()) return quests;
+        return chooseQuesting ? quests : combatAndSkills;
     }
 
     private void handleWatchdogReroll(APIContext ctx) {
@@ -290,6 +359,20 @@ public class GoalManagerModule implements F2PModule {
                 ? goalName
                 : inventoryCleanupTarget;
         if (ctx.inventory().getCount() <= 0) {
+            if (ctx.grandExchange().isOpen()) {
+                log("Preparing " + target + ": closing GE before starting goal");
+                ctx.grandExchange().close();
+                Time.sleep(450, 750);
+                return true;
+            }
+            if (isBankOpen(ctx)) {
+                log("Preparing " + target + ": closing bank before starting goal");
+                ctx.bank().close();
+                Time.sleep(450, 750);
+                return true;
+            }
+            if (clearResidualDialogue(ctx, target)) return true;
+            if (clearResidualInterface(ctx, target)) return true;
             clearInventoryCleanup();
             return false;
         }
@@ -301,25 +384,9 @@ public class GoalManagerModule implements F2PModule {
             return true;
         }
 
-        if (hasActionableDialogue(ctx)) {
-            log("Preparing " + target + ": closing dialogue before inventory cleanup");
-            if (ctx.dialogues().canContinue() && ctx.dialogues().selectContinue()) {
-                Time.sleep(450, 800);
-                return true;
-            }
-            ctx.keyboard().sendKey(KeyEvent.VK_SPACE);
-            Time.sleep(450, 800);
-            return true;
-        }
+        if (clearResidualDialogue(ctx, target)) return true;
 
-        if (ctx.widgets().isInterfaceOpen() && !isBankOpen(ctx)) {
-            log("Preparing " + target + ": closing interface before inventory cleanup");
-            if (!ctx.widgets().closeInterface()) {
-                ctx.keyboard().sendKey(KeyEvent.VK_ESCAPE);
-            }
-            Time.sleep(450, 800);
-            return true;
-        }
+        if (!isBankOpen(ctx) && clearResidualInterface(ctx, target)) return true;
 
         if (!isBankOpen(ctx)) {
             if (!Navigation.isBankReachable(ctx)) {
@@ -340,7 +407,6 @@ public class GoalManagerModule implements F2PModule {
         depositInventoryWithItemFallback(ctx);
 
         if (ctx.inventory().getCount() <= 0) {
-            clearInventoryCleanup();
             ctx.bank().close();
             Time.sleep(500, 800, () -> !isBankOpen(ctx), 100);
             return true;
@@ -379,19 +445,79 @@ public class GoalManagerModule implements F2PModule {
         inventoryCleanupPending = true;
         inventoryCleanupTarget = target;
         inventoryCleanupDepositAttempts = 0;
+        inventoryCleanupDialogueAttempts = 0;
+        inventoryCleanupDialogueSnapshot = "";
+        inventoryCleanupDialogueExhausted = false;
+        inventoryCleanupInterfaceAttempts = 0;
     }
 
     private void clearInventoryCleanup() {
         inventoryCleanupPending = false;
         inventoryCleanupTarget = null;
         inventoryCleanupDepositAttempts = 0;
+        inventoryCleanupDialogueAttempts = 0;
+        inventoryCleanupDialogueSnapshot = "";
+        inventoryCleanupDialogueExhausted = false;
+        inventoryCleanupInterfaceAttempts = 0;
+    }
+
+    private boolean clearResidualDialogue(APIContext ctx, String target) {
+        if (!hasActionableDialogue(ctx)) {
+            inventoryCleanupDialogueAttempts = 0;
+            inventoryCleanupDialogueSnapshot = "";
+            inventoryCleanupDialogueExhausted = false;
+            return false;
+        }
+        List<WidgetChild> options = ctx.dialogues().getOptions();
+        String snapshot = String.valueOf(ctx.dialogues().getText()) + ":"
+                + (options == null ? List.of() : options.stream()
+                .map(option -> option == null ? "" : option.getText()).toList());
+        if (!snapshot.equals(inventoryCleanupDialogueSnapshot)) {
+            inventoryCleanupDialogueSnapshot = snapshot;
+            inventoryCleanupDialogueAttempts = 0;
+            inventoryCleanupDialogueExhausted = false;
+        }
+        if (inventoryCleanupDialogueExhausted) return false;
+        if (++inventoryCleanupDialogueAttempts > 3) {
+            log("Preparing " + target + ": dialogue did not change after three attempts; closing residual widget");
+            if (!ctx.widgets().closeInterface()) ctx.keyboard().sendKey(KeyEvent.VK_ESCAPE);
+            inventoryCleanupDialogueExhausted = true;
+            Time.sleep(450, 750);
+            return true;
+        }
+        log("Preparing " + target + ": clearing residual dialogue (attempt "
+                + inventoryCleanupDialogueAttempts + "/3)");
+        if (!ctx.dialogues().canContinue() || !ctx.dialogues().selectContinue())
+            ctx.keyboard().sendKey(KeyEvent.VK_SPACE);
+        Time.sleep(450, 800);
+        return true;
+    }
+
+    private boolean clearResidualInterface(APIContext ctx, String target) {
+        if (!ctx.widgets().isInterfaceOpen()) {
+            inventoryCleanupInterfaceAttempts = 0;
+            return false;
+        }
+        if (inventoryCleanupInterfaceAttempts >= 3) {
+            if (inventoryCleanupInterfaceAttempts == 3)
+                log("Preparing " + target + ": residual interface did not close; proceeding with goal recovery");
+            inventoryCleanupInterfaceAttempts++;
+            return false;
+        }
+        inventoryCleanupInterfaceAttempts++;
+        log("Preparing " + target + ": closing residual interface (attempt "
+                + inventoryCleanupInterfaceAttempts + "/3)");
+        if (!ctx.widgets().closeInterface()) ctx.keyboard().sendKey(KeyEvent.VK_ESCAPE);
+        Time.sleep(450, 800);
+        return true;
     }
 
     private boolean hasActionableDialogue(APIContext ctx) {
         if (!ctx.dialogues().isDialogueOpen() && !ctx.dialogues().isChatOpen()) {
             return false;
         }
-        return ctx.dialogues().canContinue() || !ctx.dialogues().getOptions().isEmpty();
+        List<WidgetChild> options = ctx.dialogues().getOptions();
+        return ctx.dialogues().canContinue() || options != null && !options.isEmpty();
     }
 
     private void logActiveModuleTick() {
@@ -434,6 +560,21 @@ public class GoalManagerModule implements F2PModule {
         }
         if ("quests.dorics_quest".equals(moduleName)) {
             return "Doric's Quest";
+        }
+        if ("quests.ides_of_milk".equals(moduleName)) {
+            return "The Ides of Milk";
+        }
+        if ("quests.the_knights_sword".equals(moduleName)) {
+            return "The Knight's Sword";
+        }
+        if ("quests.demon_slayer.standalone".equals(moduleName)) {
+            return "Demon Slayer";
+        }
+        if ("quests.romeo_and_juliet".equals(moduleName)) {
+            return "Romeo & Juliet";
+        }
+        if ("quests.x_marks_the_spot".equals(moduleName)) {
+            return "X Marks the Spot";
         }
         if ("skills.woodcutting_firemaking".equals(moduleName)) {
             return "WC/FM";
@@ -510,3 +651,4 @@ public class GoalManagerModule implements F2PModule {
         return message.toString();
     }
 }
+

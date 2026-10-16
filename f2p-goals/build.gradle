@@ -21,3 +21,118 @@ tasks.named('check') {
     dependsOn tasks.named('deathRecoveryRegressionTest')
     dependsOn tasks.named('craftingFundingRegressionTest')
 }
+
+tasks.register('breakScheduleRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.BreakScheduleRegressionTest'
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('breakScheduleRegressionTest')
+}
+
+tasks.register('breakLogoutRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.BreakLogoutRegressionTest'
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('breakLogoutRegressionTest')
+}
+
+
+tasks.register('geSellRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.GeSellRegressionTest'
+}
+tasks.named('check') { dependsOn tasks.named('geSellRegressionTest') }
+
+tasks.register('knightsSwordDialogueRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.KnightsSwordDialogueRegressionTest'
+}
+tasks.named('check') { dependsOn tasks.named('knightsSwordDialogueRegressionTest') }
+
+tasks.register('doricQuestRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.DoricQuestRegressionTest'
+}
+tasks.named('check') { dependsOn tasks.named('doricQuestRegressionTest') }
+
+tasks.register('cookAssistantRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.CookAssistantRegressionTest'
+}
+tasks.named('check') { dependsOn tasks.named('cookAssistantRegressionTest') }
+
+tasks.register('questActionGuardRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.QuestActionGuardRegressionTest'
+}
+tasks.named('check') { dependsOn tasks.named('questActionGuardRegressionTest') }
+
+tasks.register('navigationRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.core.navigation.NavigationRegressionTest'
+}
+tasks.named('check') { dependsOn tasks.named('navigationRegressionTest') }
+
+tasks.register('cameraMovementRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.core.navigation.CameraMovementRegressionTest'
+}
+tasks.named('check') { dependsOn tasks.named('cameraMovementRegressionTest') }
+
+tasks.register('goalCategoryRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.modules.GoalCategoryRegressionTest'
+}
+tasks.named('check') { dependsOn tasks.named('goalCategoryRegressionTest') }
+
+tasks.register('targetTravelProgressRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.modules.combat.TargetTravelProgressRegressionTest'
+}
+tasks.named('check') { dependsOn tasks.named('targetTravelProgressRegressionTest') }
+
+tasks.register('accessRecoveryRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.core.navigation.AccessRecoveryRegressionTest'
+}
+tasks.named('check') { dependsOn tasks.named('accessRecoveryRegressionTest') }
+
+tasks.register('fundingCollectionRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.core.funding.FundingCollectionRegressionTest'
+}
+
+tasks.named('check') { dependsOn tasks.named('fundingCollectionRegressionTest') }
+
+tasks.register('alKharidGateRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.core.runtime.AlKharidGateRegressionTest'
+}
+
+tasks.named('check') { dependsOn tasks.named('alKharidGateRegressionTest') }
+
+tasks.register('romeoSceneTransitionRegressionTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.example.RomeoSceneTransitionRegressionTest'
+}
+
+tasks.named('check') { dependsOn tasks.named('romeoSceneTransitionRegressionTest') }

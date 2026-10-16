@@ -20,7 +20,6 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
 
 public class FishingCookingModule extends AbstractSkillingModule {
-    private static final Area DRAYNOR_NET_FISHING = new Area(3079, 3221, 3097, 3237);
     private static final Area AL_KHARID_NET_FISHING = new Area(3265, 3138, 3284, 3158);
     private static final Area AL_KHARID_REGION = new Area(3250, 3130, 3310, 3205);
     private static final Area AL_KHARID_BANK = new Area(3268, 3161, 3274, 3173);
@@ -43,15 +42,16 @@ public class FishingCookingModule extends AbstractSkillingModule {
             "Burnt anchovies"
     };
     private static final int FULL_INVENTORY_SIZE = 28;
-    private static final int MIN_RAW_FISH_BEFORE_COOKING = 100;
+    private static final int MIN_RAW_FISH_BEFORE_COOKING = 84;
+    private static final int MAX_RAW_FISH_BEFORE_COOKING = 116;
     private static final int INVENTORY_WIDGET_GROUP = 149;
     private static final int SKILLMULTI_GROUP = InterfaceID.SKILLMULTI;
     private static final int SKILLMULTI_ALL_CHILD = childId(InterfaceID.Skillmulti.ALL);
     private static final int SKILLMULTI_FIRST_ITEM_CHILD = childId(InterfaceID.Skillmulti.A);
     private static final int LEVELUP_GROUP = InterfaceID.LEVELUP_DISPLAY;
     private static final int LEVELUP_CONTINUE_CHILD = childId(InterfaceID.LevelupDisplay.CONTINUE);
-    private static final int MIN_DEFENCE_FOR_DRAYNOR_FISHING = 20;
 
+    private int rawFishCookingTarget;
     private boolean cookingBatchActive;
     private boolean preferCookingAfterFishingBank;
     private boolean needMoreRawFishForCooking;
@@ -261,20 +261,11 @@ public class FishingCookingModule extends AbstractSkillingModule {
     }
 
     private FishingTarget fishingTarget(APIContext ctx) {
-        if (ctx.skills().get(Skill.Skills.DEFENCE).getRealLevel() < MIN_DEFENCE_FOR_DRAYNOR_FISHING) {
-            return new FishingTarget(AL_KHARID_NET_FISHING, "Al Kharid net fishing spots (Defence < 20)");
-        }
-
-        if (AL_KHARID_REGION.contains(ctx.localPlayer().getLocation())
-                || needMoreRawFishForCooking
-                || skillComplete(ctx, Skill.Skills.FISHING)) {
-            return new FishingTarget(AL_KHARID_NET_FISHING, "Al Kharid net fishing spots");
-        }
-
-        return new FishingTarget(DRAYNOR_NET_FISHING, "Draynor net fishing spots");
+        return new FishingTarget(AL_KHARID_NET_FISHING, "Al Kharid net fishing spots");
     }
 
     private NPC findNetFishingSpot(APIContext ctx, FishingTarget target) {
+        java.util.List<NPC> nearby = new java.util.ArrayList<>();
         for (NPC spot : ctx.npcs()
                 .query()
                 .named("Fishing spot")
@@ -282,8 +273,12 @@ public class FishingCookingModule extends AbstractSkillingModule {
                 .results()
                 .nearestList()) {
             if (spot != null && spot.isValid()) {
-                return spot;
+                nearby.add(spot);
+                if (nearby.size() == 3) break;
             }
+        }
+        if (!nearby.isEmpty()) {
+            return nearby.get(ThreadLocalRandom.current().nextInt(nearby.size()));
         }
 
         return ctx.npcs()
@@ -294,6 +289,11 @@ public class FishingCookingModule extends AbstractSkillingModule {
     }
 
     private boolean interactNetFishingSpot(NPC fishingSpot) {
+        if (ThreadLocalRandom.current().nextInt(100) < 35) {
+            return fishingSpot.interact("Net")
+                    || fishingSpot.interact("Net", "Fishing spot")
+                    || fishingSpot.interact();
+        }
         return fishingSpot.interact("Net", "Fishing spot")
                 || fishingSpot.interact("Net")
                 || fishingSpot.interact();
@@ -786,6 +786,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
         cookingBatchActive = false;
         needMoreRawFishForCooking = false;
         preferCookingAfterFishingBank = false;
+        rawFishCookingTarget = 0;
         log("Cooking bank drain complete; no raw fish left in bank");
         Time.sleep(600, 900);
     }
@@ -951,9 +952,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
 
     private boolean walkLocallyTo(APIContext ctx, Locatable destination, String label) {
         log("Walking locally to " + label);
-        boolean walked = ctx.walking().walkOnScreen(destination)
-                || ctx.walking().walkToOnScreen(destination)
-                || ctx.walking().walkOnMap(destination)
+        boolean walked = Navigation.walkLocally(ctx, destination)
                 || ctx.walking().walkTo(destination);
         if (walked) {
             Time.sleep(700, 1200, () -> ctx.localPlayer().isMoving(), 100);
@@ -970,6 +969,7 @@ public class FishingCookingModule extends AbstractSkillingModule {
         }
 
         log("Opening " + label + " before cooking: " + object.getName());
+        org.example.core.navigation.AccessRecovery.interaction(ctx, object, "Open/Enter");
         boolean interacted = object.interact("Open")
                 || object.interact("Enter")
                 || object.interact("Walk-through")
@@ -1055,7 +1055,12 @@ public class FishingCookingModule extends AbstractSkillingModule {
     }
 
     private int minimumRawFishBeforeCooking() {
-        return MIN_RAW_FISH_BEFORE_COOKING;
+        if (rawFishCookingTarget == 0) {
+            rawFishCookingTarget = ThreadLocalRandom.current().nextInt(
+                    MIN_RAW_FISH_BEFORE_COOKING, MAX_RAW_FISH_BEFORE_COOKING + 1);
+            log("Cooking raw fish target selected: " + rawFishCookingTarget);
+        }
+        return rawFishCookingTarget;
     }
 
     private boolean skillComplete(APIContext ctx, Skill.Skills skill) {

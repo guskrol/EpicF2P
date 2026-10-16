@@ -624,7 +624,10 @@ abstract class AbstractSkillingModule implements ManagedF2PModule {
         }
 
         log("Walking to " + label);
-        Navigation.walkTo(ctx, area.getRandomTile());
+        var destination = Navigation.destinationInArea(ctx, area);
+        if (!Navigation.walkLocally(ctx, destination)) {
+            Navigation.walkTo(ctx, destination);
+        }
         Time.sleep(1200, 1800);
         return true;
     }

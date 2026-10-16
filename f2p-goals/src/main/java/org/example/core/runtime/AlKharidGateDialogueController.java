@@ -3,10 +3,13 @@ package org.example.core.runtime;
 import com.epicbot.api.gameval.InterfaceID;
 import com.epicbot.api.shared.APIContext;
 import com.epicbot.api.shared.entity.WidgetChild;
+import com.epicbot.api.shared.methods.IDialogueAPI;
 import com.epicbot.api.shared.model.Area;
 import com.epicbot.api.shared.model.Tile;
 import com.epicbot.api.shared.util.time.Time;
 import org.example.core.ScriptStats;
+import org.example.core.navigation.Navigation;
+import org.example.core.navigation.AccessRecovery;
 
 import java.awt.Point;
 import java.awt.event.KeyEvent;
@@ -19,7 +22,7 @@ public class AlKharidGateDialogueController implements RuntimeController {
     private static final long GATE_DIALOGUE_CONTEXT_MILLIS = 15_000L;
     private static final long CONTINUE_LOOP_WINDOW_MILLIS = 30_000L;
     private static final int MAX_CONTINUE_ATTEMPTS_BEFORE_FALLBACK = 5;
-    private static final long FALLBACK_DURATION_MILLIS = 18_000L;
+    private static final long FALLBACK_DURATION_MILLIS = 120_000L;
     private static final Tile[] NORTH_BYPASS_TILES = {
             new Tile(3263, 3249, 0),
             new Tile(3262, 3265, 0),
@@ -33,6 +36,9 @@ public class AlKharidGateDialogueController implements RuntimeController {
     private long firstContinueAttemptAt;
     private long fallbackUntil;
     private int continueAttempts;
+    private Tile fallbackProgressTile;
+    private long fallbackProgressAt;
+    private int fallbackRetries;
 
     public AlKharidGateDialogueController(Consumer<String> logger, ScriptStats stats) {
         this.logger = logger;
@@ -51,7 +57,7 @@ public class AlKharidGateDialogueController implements RuntimeController {
         }
 
         long now = System.currentTimeMillis();
-        if (now < fallbackUntil) {
+        if (fallbackUntil > 0L) {
             return true;
         }
 
@@ -75,22 +81,21 @@ public class AlKharidGateDialogueController implements RuntimeController {
         }
 
         return gateTextVisible
-                || firstNegativeOption(ctx) != null
                 || (now < gateDialogueSeenUntil
-                && (ctx.dialogues().canContinue()
-                || !ctx.dialogues().getOptions().isEmpty()
+                && (firstNegativeOption(ctx) != null
                 || findContinueTextWidget(ctx) != null));
     }
 
     @Override
     public void execute(APIContext ctx) {
-        if (System.currentTimeMillis() < fallbackUntil) {
+        if (fallbackUntil > 0L) {
             executeFallback(ctx);
             return;
         }
 
         setStatus("Al Kharid gate: cancelling toll dialogue");
         clearInteractionState(ctx);
+        if (continueLoopExceeded(ctx, "gate dialogue")) return;
 
         WidgetChild negativeOption = firstNegativeOption(ctx);
         if (negativeOption != null) {
@@ -98,16 +103,14 @@ public class AlKharidGateDialogueController implements RuntimeController {
             if (clickWidgetCenter(ctx, negativeOption)
                     || negativeOption.click(false)
                     || ctx.dialogues().selectOption(text -> isNegativeOption(text))) {
-                resetDialogueTracking();
+                // Do not release the route back to the same toll immediately.
+                prepareFallback(ctx, "toll declined");
                 Time.sleep(700, 1100);
                 return;
             }
         }
 
-        if (ctx.dialogues().canContinue()) {
-            if (continueLoopExceeded(ctx, "dialogue continue")) {
-                return;
-            }
+        if (ctx.dialogues().canContinue() && findContinueTextWidget(ctx) != null) {
             logThrottled("Continuing Al Kharid gate dialogue until cancel option appears");
             if (!ctx.dialogues().selectContinue()) {
                 clickContinueWidget(ctx);
@@ -119,9 +122,6 @@ public class AlKharidGateDialogueController implements RuntimeController {
 
         WidgetChild continueWidget = findContinueTextWidget(ctx);
         if (continueWidget != null) {
-            if (continueLoopExceeded(ctx, "continue widget")) {
-                return;
-            }
             logThrottled("Clicking Al Kharid gate continue widget before cancelling");
             if (clickWidgetCenter(ctx, continueWidget) || continueWidget.click(false)) {
                 Time.sleep(650, 1000);
@@ -129,9 +129,9 @@ public class AlKharidGateDialogueController implements RuntimeController {
             }
         }
 
-        logThrottled("Al Kharid gate dialogue detected; closing it without paying");
-        ctx.keyboard().sendKey(KeyEvent.VK_ESCAPE);
-        Time.sleep(650, 1000);
+        // Escape can toggle the inventory when the API retains a stale chat flag.
+        // A walk cancels the conversation and also advances the intended bypass.
+        startFallback(ctx, "no actionable toll dialogue widget");
     }
 
     private boolean isNearGate(APIContext ctx) {
@@ -141,7 +141,7 @@ public class AlKharidGateDialogueController implements RuntimeController {
 
     private WidgetChild firstNegativeOption(APIContext ctx) {
         for (WidgetChild option : ctx.dialogues().getOptions()) {
-            if (isNegativeOption(visibleText(option))) {
+            if (isVisibleWidget(option) && isNegativeOption(visibleText(option))) {
                 return option;
             }
         }
@@ -150,8 +150,11 @@ public class AlKharidGateDialogueController implements RuntimeController {
 
     private boolean isNegativeOption(String text) {
         String normalized = normalize(text);
-        return normalized.contains("no")
-                || normalized.contains("cancel")
+        return normalized.equals("no")
+                || normalized.startsWith("no,")
+                || normalized.startsWith("no.")
+                || normalized.startsWith("no ")
+                || normalized.equals("cancel")
                 || normalized.contains("never mind")
                 || normalized.contains("don't")
                 || normalized.contains("do not")
@@ -160,7 +163,8 @@ public class AlKharidGateDialogueController implements RuntimeController {
 
     private boolean hasGateTextWidget(APIContext ctx) {
         return findVisibleWidgetTextContaining(ctx, "toll") != null
-                || findVisibleWidgetTextContaining(ctx, "10 coins") != null;
+                || findVisibleWidgetTextContaining(ctx, "10 coins") != null
+                || findVisibleWidgetTextContaining(ctx, "10 gold") != null;
     }
 
     private boolean clickContinueWidget(APIContext ctx) {
@@ -191,10 +195,22 @@ public class AlKharidGateDialogueController implements RuntimeController {
     private WidgetChild findVisibleWidgetTextContaining(APIContext ctx, String text) {
         String needle = normalize(text);
         for (WidgetChild widget : ctx.widgets().getAllChildren(candidate ->
-                isVisibleWidget(candidate) && normalize(visibleText(candidate)).contains(needle))) {
+                isVisibleWidget(candidate) && isDialogueWidget(candidate)
+                        && normalize(visibleText(candidate)).contains(needle))) {
             return widget;
         }
         return null;
+    }
+
+    private boolean isDialogueWidget(WidgetChild widget) {
+        int group = widget.getGroup() == null ? widget.getParentId() : widget.getGroup().getIndex();
+        for (int dialogueGroup : IDialogueAPI.DIALOG_GROUP_IDS) {
+            if (group == dialogueGroup) return true;
+        }
+        // Only the current message fields, never the chat history or item tooltip.
+        return group == InterfaceID.CHATBOX
+                && (widget.getChildId() == childId(InterfaceID.Chatbox.MES_TEXT)
+                || widget.getChildId() == childId(InterfaceID.Chatbox.MES_TEXT2));
     }
 
     private void clearInteractionState(APIContext ctx) {
@@ -225,51 +241,62 @@ public class AlKharidGateDialogueController implements RuntimeController {
     }
 
     private void startFallback(APIContext ctx, String reason) {
-        fallbackUntil = System.currentTimeMillis() + FALLBACK_DURATION_MILLIS;
-        resetDialogueTracking();
-        logImmediate("Gate dialogue fallback activated: " + reason + "; walking north bypass");
+        prepareFallback(ctx, reason);
         executeFallback(ctx);
+    }
+
+    private void prepareFallback(APIContext ctx, String reason) {
+        fallbackUntil = System.currentTimeMillis() + FALLBACK_DURATION_MILLIS;
+        fallbackProgressTile = ctx.localPlayer().getLocation();
+        fallbackProgressAt = System.currentTimeMillis();
+        fallbackRetries = 0;
+        resetDialogueTracking();
+        Navigation.retryRoute(ctx);
+        logImmediate("Gate dialogue fallback activated: " + reason + "; walking north bypass");
     }
 
     private void executeFallback(APIContext ctx) {
         setStatus("Al Kharid gate: fallback north bypass");
         clearInteractionState(ctx);
 
-        if (isNorthBypassSafe(ctx) && !hasOpenDialogue(ctx)) {
+        if (isNorthBypassSafe(ctx)) {
             fallbackUntil = 0L;
+            Navigation.retryRoute(ctx);
+            logImmediate("North bypass reached; resuming the task route");
             return;
         }
 
-        if (hasOpenDialogue(ctx)) {
-            ctx.keyboard().sendKey(KeyEvent.VK_ESCAPE);
-            Time.sleep(600, 900);
-            return;
+        long now = System.currentTimeMillis();
+        Tile here = ctx.localPlayer().getLocation();
+        if (here != null && (fallbackProgressTile == null
+                || here.getX() != fallbackProgressTile.getX() || here.getY() != fallbackProgressTile.getY()
+                || here.getPlane() != fallbackProgressTile.getPlane())) {
+            fallbackProgressTile = here;
+            fallbackProgressAt = now;
         }
-
-        if (ctx.localPlayer().isMoving()) {
-            Time.sleep(700, 1100);
-            return;
+        if (now >= fallbackUntil || now - fallbackProgressAt >= 20_000L) {
+            if (now >= fallbackUntil || ++fallbackRetries >= 3) {
+                fallbackUntil = 0L;
+                AccessRecovery.rejectCurrentAction(ctx, "Al Kharid north bypass made no progress");
+                return;
+            }
+            Navigation.retryRoute(ctx);
+            fallbackProgressAt = now;
+            logImmediate("North bypass stalled; rebuilding route, attempt " + fallbackRetries);
         }
 
         Tile target = nextNorthBypassTile(ctx);
         logThrottled("Walking north away from Al Kharid gate dialogue to " + target);
-        if (!ctx.walking().walkOnMap(target)) {
-            ctx.walking().walkTo(target);
-        }
-        Time.sleep(900, 1400);
-    }
-
-    private boolean hasOpenDialogue(APIContext ctx) {
-        return ctx.dialogues().isDialogueOpen()
-                || ctx.dialogues().isChatOpen()
-                || ctx.dialogues().canContinue()
-                || !ctx.dialogues().getOptions().isEmpty()
-                || findContinueTextWidget(ctx) != null;
+        Navigation.walkToNoTeleports(ctx, target);
+        Time.sleep(250, 450);
     }
 
     private Tile nextNorthBypassTile(APIContext ctx) {
         Tile location = ctx.localPlayer().getLocation();
         if (location == null) {
+            return NORTH_BYPASS_TILES[NORTH_BYPASS_TILES.length - 1];
+        }
+        if (location.getX() >= 3267) {
             return NORTH_BYPASS_TILES[NORTH_BYPASS_TILES.length - 1];
         }
         if (location.getY() < 3248) {
@@ -283,7 +310,10 @@ public class AlKharidGateDialogueController implements RuntimeController {
 
     private boolean isNorthBypassSafe(APIContext ctx) {
         Tile location = ctx.localPlayer().getLocation();
-        return location != null && location.getY() >= 3265;
+        Tile exit = NORTH_BYPASS_TILES[NORTH_BYPASS_TILES.length - 1];
+        return location != null && location.getPlane() == exit.getPlane()
+                && Math.max(Math.abs(location.getX() - exit.getX()),
+                        Math.abs(location.getY() - exit.getY())) <= 2;
     }
 
     private void resetDialogueTracking() {
@@ -303,6 +333,8 @@ public class AlKharidGateDialogueController implements RuntimeController {
     private boolean isVisibleWidget(WidgetChild widget) {
         return widget != null
                 && widget.isValid()
+                && widget.isVisible()
+                && !widget.isHidden()
                 && widget.getWidth() > 0
                 && widget.getHeight() > 0;
     }
@@ -319,7 +351,7 @@ public class AlKharidGateDialogueController implements RuntimeController {
         if (rawText == null) {
             rawText = "";
         }
-        return (text + " " + rawText).trim();
+        return (text.isBlank() ? rawText : text).trim();
     }
 
     private String normalize(String text) {

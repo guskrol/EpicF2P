@@ -7,6 +7,9 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.io.IOException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -47,7 +50,11 @@ public class ScriptStats {
     private volatile String trainingSkill = "Melee";
     private volatile String goalName = "Selecting";
     private volatile long goalEndsAt;
+    private volatile long pausedGoalRemaining = -1L;
     private volatile boolean geRestricted;
+    private volatile boolean geTradeUnlockVerified;
+    private volatile boolean geTradeRestrictionObserved;
+    private volatile String geTradeProfileAccount = "";
     private volatile String currentTask = "Selecting";
     private volatile String internalPhase = "starting";
     private volatile String nextObjective = "Starting";
@@ -141,6 +148,14 @@ public class ScriptStats {
         this.goalEndsAt = Math.max(0L, goalEndsAt);
     }
 
+    public void pauseGoalTimer(long remainingMillis) {
+        pausedGoalRemaining = Math.max(0L, remainingMillis);
+    }
+
+    public void resumeGoalTimer() {
+        pausedGoalRemaining = -1L;
+    }
+
     public void clearGoal() {
         this.goalName = "Combat/Money";
         this.currentTask = this.goalName;
@@ -149,6 +164,69 @@ public class ScriptStats {
 
     public void setGeRestricted(boolean geRestricted) {
         this.geRestricted = geRestricted;
+        if (geRestricted) {
+            this.geTradeUnlockVerified = false;
+            this.geTradeRestrictionObserved = true;
+        }
+    }
+
+    public void markGeTradeUnlockVerified() {
+        this.geRestricted = false;
+        this.geTradeUnlockVerified = true;
+        this.geTradeRestrictionObserved = false;
+    }
+
+    public void markGeTradeUnlockVerified(APIContext ctx) {
+        markGeTradeUnlockVerified();
+        Path profile = geTradeProfile(ctx);
+        if (profile == null) return;
+        try {
+            Files.createDirectories(profile.getParent());
+            Files.writeString(profile, "verified");
+        } catch (IOException ignored) {
+            // Live accepted offer remains authoritative when the profile is unavailable.
+        }
+    }
+
+    public void restoreGeTradeUnlock(APIContext ctx) {
+        String account = SkillCapManager.accountIdentifier(ctx);
+        if (account.isBlank() || account.equals(geTradeProfileAccount)) return;
+        geTradeProfileAccount = account;
+        Path profile = geTradeProfile(ctx);
+        if (profile != null && Files.isRegularFile(profile)) {
+            markGeTradeUnlockVerified();
+            return;
+        }
+        if (ctx.grandExchange().isOpen()) {
+            for (com.epicbot.api.shared.model.ge.GrandExchangeSlot slot : ctx.grandExchange().getSlots()) {
+                if (slot == null || slot.getOffer() == null) continue;
+                var state = slot.getState();
+                if (state == com.epicbot.api.shared.model.ge.GrandExchangeOffer.OfferState.SELLING
+                        || state == com.epicbot.api.shared.model.ge.GrandExchangeOffer.OfferState.SOLD
+                        || state == com.epicbot.api.shared.model.ge.GrandExchangeOffer.OfferState.BUYING
+                        || state == com.epicbot.api.shared.model.ge.GrandExchangeOffer.OfferState.BOUGHT) {
+                    markGeTradeUnlockVerified(ctx);
+                    break;
+                }
+            }
+        }
+    }
+
+    private Path geTradeProfile(APIContext ctx) {
+        String account = SkillCapManager.accountIdentifier(ctx);
+        if (account.isBlank()) return null;
+        String key = account.replaceAll("[^a-zA-Z0-9_-]", "_");
+        return Path.of(System.getProperty("user.home"), "EpicBot", "f2p-goals",
+                "ge-trade", key + ".verified");
+    }
+
+    public String geTradeStatus() {
+        return geTradeUnlockVerified ? "verified"
+                : geTradeRestrictionObserved ? "restricted" : "unverified";
+    }
+
+    public boolean isGeTradeUnlockVerified() {
+        return geTradeUnlockVerified;
     }
 
     public void recordFiremakingBlockedMessage() {
@@ -257,7 +335,8 @@ public class ScriptStats {
             return "--";
         }
 
-        long remainingMillis = goalEndsAt - System.currentTimeMillis();
+        long remainingMillis = pausedGoalRemaining >= 0L
+                ? pausedGoalRemaining : goalEndsAt - System.currentTimeMillis();
         if (remainingMillis <= 0L) {
             return "switching";
         }

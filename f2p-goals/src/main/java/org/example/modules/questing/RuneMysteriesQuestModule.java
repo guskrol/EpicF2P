@@ -2,6 +2,7 @@ package org.example.modules.questing;
 
 import com.epicbot.api.shared.APIContext;
 import com.epicbot.api.shared.entity.NPC;
+import com.epicbot.api.shared.entity.WidgetChild;
 import com.epicbot.api.shared.methods.IQuestAPI;
 import com.epicbot.api.shared.model.Area;
 import com.epicbot.api.shared.util.time.Time;
@@ -10,6 +11,7 @@ import org.example.core.ScriptStats;
 import org.example.core.navigation.Navigation;
 
 import java.awt.event.KeyEvent;
+import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
 
@@ -26,6 +28,9 @@ public class RuneMysteriesQuestModule implements ManagedF2PModule {
     private final ScriptStats stats;
     private long nextTravelLogAt;
     private long nextRecoveryLogAt;
+    private String dialogueSnapshot = "";
+    private int unchangedDialogueActions;
+    private boolean dialogueRecoveryIssued;
 
     public RuneMysteriesQuestModule(Consumer<String> logger, ScriptStats stats) {
         this.logger = logger;
@@ -98,8 +103,12 @@ public class RuneMysteriesQuestModule implements ManagedF2PModule {
 
     private boolean handleDialogue(APIContext ctx) {
         if (!ctx.dialogues().isDialogueOpen() && !ctx.dialogues().isChatOpen()) {
+            dialogueSnapshot = "";
+            unchangedDialogueActions = 0;
+            dialogueRecoveryIssued = false;
             return false;
         }
+        if (!allowDialogueAction(ctx)) return false;
 
         if (ctx.dialogues().canContinue()) {
             log("Rune Mysteries: continuing dialogue");
@@ -144,7 +153,26 @@ public class RuneMysteriesQuestModule implements ManagedF2PModule {
             log("Rune Mysteries: dialogue open but no option/continue resolved; waiting");
             nextRecoveryLogAt = now + 5_000L;
         }
-        return true;
+        return false;
+    }
+
+    private boolean allowDialogueAction(APIContext ctx) {
+        List<WidgetChild> options = ctx.dialogues().getOptions();
+        String snapshot = String.valueOf(ctx.dialogues().getText()) + ":"
+                + (options == null ? List.of() : options.stream()
+                .map(option -> option == null ? "" : option.getText()).toList());
+        if (!snapshot.equals(dialogueSnapshot)) {
+            dialogueSnapshot = snapshot;
+            unchangedDialogueActions = 0;
+            dialogueRecoveryIssued = false;
+        }
+        if (++unchangedDialogueActions <= 4) return true;
+        if (!dialogueRecoveryIssued) {
+            log("Rune Mysteries: dialogue unchanged after four actions; closing it before retrying stage");
+            if (!ctx.widgets().closeInterface()) ctx.keyboard().sendKey(KeyEvent.VK_ESCAPE);
+            dialogueRecoveryIssued = true;
+        }
+        return false;
     }
 
     private boolean withdrawBankedQuestItem(APIContext ctx) {
@@ -214,7 +242,7 @@ public class RuneMysteriesQuestModule implements ManagedF2PModule {
         if (npc != null && npc.isValid() && npc.tileDistanceTo(ctx) <= 8) {
             stats.setStatus("Rune Mysteries: talking to " + label);
             log("Rune Mysteries: talking to " + label);
-            ctx.camera().turnTo(npc);
+            org.example.core.navigation.CameraMovement.focus(ctx, npc, logger);
             if (npc.interact("Talk-to")) {
                 Time.sleep(1200, 2000,
                         () -> ctx.dialogues().isDialogueOpen() || ctx.dialogues().isChatOpen(),

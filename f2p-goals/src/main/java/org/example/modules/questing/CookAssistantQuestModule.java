@@ -1,14 +1,21 @@
 package org.example.modules.questing;
 
 import com.epicbot.api.shared.APIContext;
+import com.epicbot.api.gameval.ObjectID;
+import com.epicbot.api.gameval.VarbitID;
 import com.epicbot.api.shared.entity.GroundItem;
+import com.epicbot.api.shared.entity.Item;
 import com.epicbot.api.shared.entity.NPC;
 import com.epicbot.api.shared.entity.SceneObject;
 import com.epicbot.api.shared.entity.details.Locatable;
 import com.epicbot.api.shared.entity.WidgetChild;
 import com.epicbot.api.shared.methods.IQuestAPI;
+import com.epicbot.api.shared.methods.IBankAPI;
+import com.epicbot.api.shared.methods.IGrandExchangeAPI;
 import com.epicbot.api.shared.model.Area;
 import com.epicbot.api.shared.model.Tile;
+import com.epicbot.api.shared.model.ge.GrandExchangeOffer;
+import com.epicbot.api.shared.model.ge.GrandExchangeSlot;
 import com.epicbot.api.shared.util.time.Time;
 import com.epicbot.api.shared.webwalking.model.WalkState;
 import org.example.core.ManagedF2PModule;
@@ -24,8 +31,14 @@ import java.util.function.Consumer;
 
 public class CookAssistantQuestModule implements ManagedF2PModule {
     private static final Area COOK_AREA = new Area(3205, 3211, 3213, 3218);
-    private static final Area EGG_AREA = new Area(3223, 3292, 3240, 3306);
-    private static final Area DAIRY_COW_AREA = new Area(3253, 3267, 3267, 3282);
+    private static final Tile COOK_STAND_TILE = new Tile(3206, 3214, 0);
+    private static final Area EGG_AREA = new Area(3174, 3292, 3181, 3300);
+    private static final Area DAIRY_COW_AREA = new Area(3168, 3312, 3177, 3322);
+    private static final Area MILL_AREA = new Area(3161, 3302, 3171, 3311);
+    private static final Tile MILL_LADDER = new Tile(3164, 3307, 0);
+    private static final Tile MILL_HOPPER = new Tile(3166, 3307, 2);
+    private static final Tile MILL_CONTROLS = new Tile(3166, 3305, 2);
+    private static final Tile MILL_BIN = new Tile(3166, 3306, 0);
     private static final Area GE_AREA = new Area(3160, 3478, 3175, 3490);
     private static final int EGG_SEARCH_DISTANCE = 18;
     private static final int EGG_REPOSITION_AFTER_MISSES = 3;
@@ -34,6 +47,8 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
     private static final String EGG = "Egg";
     private static final String BUCKET = "Bucket";
     private static final String BUCKET_OF_MILK = "Bucket of milk";
+    private static final String POT = "Pot";
+    private static final String GRAIN = "Grain";
     private static final String POT_OF_FLOUR = "Pot of flour";
     private static final String COINS = "Coins";
 
@@ -51,11 +66,21 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
     private long nextTravelLogAt;
     private long nextRecoveryLogAt;
     private long nextGeCollectAt;
+    private long offerPlacedAt;
+    private int geCollectionAttempts;
+    private long nextActionAt;
+    private long lastMaterialProgressAt;
+    private int lastMaterialSignature = -1;
     private long nextStaleDialogueLogAt;
+    private String dialogueSnapshot = "";
+    private int unchangedDialogueActions;
+    private boolean dialogueRecoveryIssued;
     private long nextEggDebugAt;
     private boolean bankChecked;
     private int bankWalkFailures;
     private int consecutiveEggMisses;
+    private boolean grainLoaded;
+    private int millActionFailures;
 
     public CookAssistantQuestModule(Consumer<String> logger, ScriptStats stats) {
         this.logger = logger;
@@ -74,24 +99,27 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
 
     @Override
     public void execute(APIContext ctx) {
+        if (System.currentTimeMillis() < nextActionAt) return;
         stats.setTrainingSkill("Questing");
 
         if (isComplete(ctx)) {
             stats.setStatus("Cook's Assistant complete");
+            closeCompletionScreen(ctx);
             return;
+        }
+
+        int signature = materialSignature(ctx);
+        if (signature != lastMaterialSignature) {
+            lastMaterialSignature = signature;
+            lastMaterialProgressAt = System.currentTimeMillis();
+        } else if (lastMaterialProgressAt > 0
+                && System.currentTimeMillis() - lastMaterialProgressAt > 4 * 60_000L) {
+            logRecovery("Cook's Assistant: no ingredient progress for 4 minutes; rechecking bank/GE");
+            bankChecked = false;
+            lastMaterialProgressAt = System.currentTimeMillis();
         }
 
         if (handleDialogue(ctx)) {
-            return;
-        }
-
-        if (!ctx.quests().isStarted(IQuestAPI.Quest.COOKS_ASSISTANT)) {
-            talkToCook(ctx);
-            return;
-        }
-
-        if (hasAllFinalIngredients(ctx)) {
-            talkToCook(ctx);
             return;
         }
 
@@ -100,18 +128,23 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
             return;
         }
 
+        if (hasAllFinalIngredients(ctx)) {
+            talkToCook(ctx);
+            return;
+        }
+
         if (!bankChecked || ctx.bank().isOpen()) {
             handleBank(ctx);
             return;
         }
 
-        if (collectSimpleWorldIngredient(ctx)) {
-            return;
-        }
-
         String itemToBuy = firstMissingBuyableIngredient(ctx);
         if (itemToBuy != null) {
-            startGrandExchangeBuy(ctx, itemToBuy);
+            if (ctx.inventory().getCount(true, COINS) >= buyPrice(itemToBuy))
+                startGrandExchangeBuy(ctx, itemToBuy);
+            else if (!collectSimpleWorldIngredient(ctx))
+                logRecovery("Cook's Assistant: insufficient coins for " + itemToBuy
+                        + "; local ingredient recovery needed");
             return;
         }
 
@@ -127,13 +160,18 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
 
     @Override
     public int priority(APIContext ctx) {
-        return isComplete(ctx) ? 0 : 60;
+        return isComplete(ctx) ? 0
+                : ctx.quests().isStarted(IQuestAPI.Quest.COOKS_ASSISTANT) ? 92 : 62;
     }
 
     private boolean handleDialogue(APIContext ctx) {
         if (!ctx.dialogues().isDialogueOpen() && !ctx.dialogues().isChatOpen()) {
+            dialogueSnapshot = "";
+            unchangedDialogueActions = 0;
+            dialogueRecoveryIssued = false;
             return false;
         }
+        if (!allowDialogueAction(ctx)) return false;
 
         if (ctx.dialogues().canContinue()) {
             stats.setStatus("Cook's Assistant: continuing dialogue");
@@ -181,6 +219,25 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
         if (now >= nextStaleDialogueLogAt) {
             log("Cook's Assistant: stale dialogue flag ignored; continuing quest logic");
             nextStaleDialogueLogAt = now + 15_000L;
+        }
+        return false;
+    }
+
+    private boolean allowDialogueAction(APIContext ctx) {
+        List<WidgetChild> options = ctx.dialogues().getOptions();
+        String snapshot = String.valueOf(ctx.dialogues().getText()) + ":"
+                + (options == null ? List.of() : options.stream()
+                .map(option -> option == null ? "" : option.getText()).toList());
+        if (!snapshot.equals(dialogueSnapshot)) {
+            dialogueSnapshot = snapshot;
+            unchangedDialogueActions = 0;
+            dialogueRecoveryIssued = false;
+        }
+        if (++unchangedDialogueActions <= 4) return true;
+        if (!dialogueRecoveryIssued) {
+            log("Cook's Assistant: dialogue unchanged after four actions; closing it before retrying stage");
+            if (!ctx.widgets().closeInterface()) ctx.keyboard().sendKey(KeyEvent.VK_ESCAPE);
+            dialogueRecoveryIssued = true;
         }
         return false;
     }
@@ -256,7 +313,7 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
             return;
         }
 
-        if (ctx.inventory().getEmptySlotCount() < 3 && !hasAllFinalIngredients(ctx)) {
+        if (ctx.inventory().getEmptySlotCount() < 4 && !hasAllFinalIngredients(ctx)) {
             stats.setStatus("Cook's Assistant: depositing non-quest inventory");
             log("Cook's Assistant: depositing non-quest inventory");
             ctx.bank().depositAllExcept(item -> item != null && shouldKeepInventoryItem(item.getName()));
@@ -265,18 +322,39 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
         }
 
         for (String item : FINAL_INGREDIENTS) {
-            if (!ctx.inventory().contains(item) && ctx.bank().contains(item)) {
-                stats.setStatus("Cook's Assistant: withdrawing " + item);
-                log("Cook's Assistant: withdrawing " + item);
-                ctx.bank().withdraw(1, item);
-                Time.sleep(650, 1000, () -> ctx.inventory().contains(item), 100);
+            if (ctx.inventory().contains(carried -> isNamedItem(carried, item) && isNoted(carried))) {
+                boolean deposited = ctx.bank().depositAll(carried -> isNamedItem(carried, item)
+                        && isNoted(carried));
+                log("Cook's Assistant: depositing noted " + item + " for item withdrawal=" + deposited);
+                nextActionAt = System.currentTimeMillis() + 800L;
                 return;
             }
         }
 
-        if (!ctx.inventory().contains(BUCKET_OF_MILK)
+        for (String item : FINAL_INGREDIENTS) {
+            if (!hasUsable(ctx, item) && ctx.bank().contains(item)) {
+                if (!ctx.bank().isWithdrawMode(IBankAPI.WithdrawMode.ITEM)) {
+                    boolean selected = ctx.bank().selectWithdrawMode(IBankAPI.WithdrawMode.ITEM);
+                    log("Cook's Assistant: selected bank item withdrawal mode=" + selected);
+                    nextActionAt = System.currentTimeMillis() + 800L;
+                    return;
+                }
+                stats.setStatus("Cook's Assistant: withdrawing " + item);
+                log("Cook's Assistant: withdrawing " + item);
+                ctx.bank().withdraw(1, item);
+                Time.sleep(650, 1000, () -> hasUsable(ctx, item), 100);
+                return;
+            }
+        }
+
+        if (!hasUsable(ctx, BUCKET_OF_MILK)
                 && !ctx.inventory().contains(BUCKET)
                 && ctx.bank().contains(BUCKET)) {
+            if (!ctx.bank().isWithdrawMode(IBankAPI.WithdrawMode.ITEM)) {
+                ctx.bank().selectWithdrawMode(IBankAPI.WithdrawMode.ITEM);
+                nextActionAt = System.currentTimeMillis() + 800L;
+                return;
+            }
             stats.setStatus("Cook's Assistant: withdrawing Bucket for milk");
             log("Cook's Assistant: withdrawing Bucket for milk");
             ctx.bank().withdraw(1, BUCKET);
@@ -284,7 +362,8 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
             return;
         }
 
-        if (needsGeBuy(ctx) && ctx.inventory().getCount(COINS) < estimatedMissingBuyCost(ctx) && ctx.bank().contains(COINS)) {
+        if (needsGeBuy(ctx) && ctx.inventory().getCount(true, COINS) < estimatedMissingBuyCost(ctx)
+                && ctx.bank().contains(COINS)) {
             stats.setStatus("Cook's Assistant: withdrawing coins for GE ingredients");
             log("Cook's Assistant: withdrawing coins for GE ingredients");
             ctx.bank().withdrawAll(COINS);
@@ -299,14 +378,154 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
     }
 
     private boolean collectSimpleWorldIngredient(APIContext ctx) {
-        if (!ctx.inventory().contains(EGG)) {
+        if (!hasUsable(ctx, EGG)) {
             return collectEgg(ctx);
         }
 
-        if (!ctx.inventory().contains(BUCKET_OF_MILK) && ctx.inventory().contains(BUCKET)) {
+        if (!hasUsable(ctx, BUCKET_OF_MILK) && !ctx.inventory().contains(BUCKET)) {
+            return collectContainer(ctx, BUCKET);
+        }
+
+        if (!hasUsable(ctx, BUCKET_OF_MILK)) {
+            if (ctx.localPlayer().getLocation().getY() > 9000) return leaveCellar(ctx);
             return milkDairyCow(ctx);
         }
 
+        if (!hasUsable(ctx, POT_OF_FLOUR)) return makeFlour(ctx);
+
+        return false;
+    }
+
+    private boolean collectContainer(APIContext ctx, String name) {
+        Tile here = ctx.localPlayer().getLocation();
+        if (here == null) return true;
+        boolean cellar = here.getY() > 9000;
+        if (POT.equals(name) && cellar) return leaveCellar(ctx);
+        if (BUCKET.equals(name) && !cellar) {
+            if (!COOK_AREA.contains(here)) {
+                walkSafelyTo(ctx, COOK_STAND_TILE, "castle kitchen for Bucket");
+                return true;
+            }
+            if (openKitchenDoor(ctx, COOK_STAND_TILE)) return true;
+            SceneObject trapdoor = ctx.objects().query().named("Trapdoor")
+                    .actions("Climb-down").within(COOK_AREA).results().nearest();
+            if (trapdoor != null && trapdoor.isValid() && trapdoor.interact("Climb-down")) {
+                log("Cook's Assistant: entering castle cellar for Bucket");
+                nextActionAt = System.currentTimeMillis() + 1400L;
+            } else logRecovery("Cook's Assistant: locating castle cellar trapdoor for Bucket");
+            return true;
+        }
+        if (POT.equals(name) && !COOK_AREA.contains(here)) {
+            walkSafelyTo(ctx, COOK_STAND_TILE, "castle kitchen for Pot");
+            return true;
+        }
+        if (POT.equals(name) && openKitchenDoor(ctx, COOK_STAND_TILE)) return true;
+        GroundItem item = ctx.groundItems().query().named(name).results().nearest();
+        if (item != null && item.isValid() && item.tileDistanceTo(ctx) <= 12) {
+            boolean taken = item.interact("Take") || ctx.menu().interact("Take", item, false);
+            log("Cook's Assistant: taking ground " + name + "=" + taken);
+            nextActionAt = System.currentTimeMillis() + 1000L;
+        } else logRecovery("Cook's Assistant: waiting for " + name + " ground spawn");
+        return true;
+    }
+
+    private boolean leaveCellar(APIContext ctx) {
+        SceneObject exit = ctx.objects().query().named("Ladder")
+                .actions("Climb-up").results().nearest();
+        if (exit == null) exit = ctx.objects().query().actions("Climb-up").results().nearest();
+        if (exit != null && exit.isValid() && exit.tileDistanceTo(ctx) <= 12) {
+            boolean climbed = exit.interact("Climb-up");
+            log("Cook's Assistant: leaving castle cellar=" + climbed);
+            nextActionAt = System.currentTimeMillis() + 1200L;
+        } else logRecovery("Cook's Assistant: locating cellar exit ladder");
+        return true;
+    }
+
+    private boolean makeFlour(APIContext ctx) {
+        if (!ctx.inventory().contains(POT)) return collectContainer(ctx, POT);
+        Tile here = ctx.localPlayer().getLocation();
+        if (here == null) return true;
+        if (here.getY() > 9000) return leaveCellar(ctx);
+        if (ctx.vars().getVarbit(VarbitID.MILL_FLOUR) > 0) {
+            grainLoaded = false;
+            if (!goToMillFloor(ctx, 0)) return true;
+            return interactMill(ctx, ObjectID.MILLBASE_FLOUR, MILL_BIN,
+                    new String[]{"Empty", "Collect", "Take-flour"}, "collect flour");
+        }
+        if (grainLoaded) {
+            if (!goToMillFloor(ctx, 2)) return true;
+            return interactMill(ctx, ObjectID.HOPPERLEVERS1, MILL_CONTROLS,
+                    new String[]{"Operate"}, "operate hopper controls");
+        }
+        if (ctx.inventory().contains(GRAIN)) {
+            if (!goToMillFloor(ctx, 2)) return true;
+            boolean acted = interactMill(ctx, ObjectID.HOPPER1, MILL_HOPPER,
+                    new String[]{"Fill"}, "fill hopper");
+            if (acted) grainLoaded = true;
+            return true;
+        }
+        if (here.getPlane() > 0 && MILL_AREA.contains(here.getX(), here.getY())) {
+            goToMillFloor(ctx, 0);
+            return true;
+        }
+        Tile wheatTile = new Tile(3161, 3292, 0);
+        if (wheatTile.tileDistanceTo(ctx) > 8) {
+            walkSafelyTo(ctx, wheatTile, "wheat field for flour");
+            return true;
+        }
+        SceneObject wheat = ctx.objects().query().id(ObjectID.FAI_VARROCK_WHEAT_CORNER)
+                .results().nearest();
+        if (wheat == null || !wheat.isValid()) wheat = ctx.objects().query()
+                .named("Wheat").actions("Pick").results().nearest();
+        if (wheat != null && wheat.isValid() && wheat.tileDistanceTo(ctx) <= 10) {
+            boolean picked = wheat.interact("Pick");
+            log("Cook's Assistant: picking grain for flour=" + picked);
+            nextActionAt = System.currentTimeMillis() + 1000L;
+        } else logRecovery("Cook's Assistant: locating wheat beside Mill Lane Mill");
+        return true;
+    }
+
+    private boolean goToMillFloor(APIContext ctx, int targetPlane) {
+        Tile here = ctx.localPlayer().getLocation();
+        if (here == null) return false;
+        if (!MILL_AREA.contains(here.getX(), here.getY())) {
+            walkSafelyTo(ctx, MILL_LADDER, "Mill Lane Mill");
+            return false;
+        }
+        if (here.getPlane() == targetPlane) return true;
+        boolean up = here.getPlane() < targetPlane;
+        int ladderId = here.getPlane() == 0 ? ObjectID.QIP_COOK_LADDER
+                : here.getPlane() == 1 ? ObjectID.QIP_COOK_LADDER_MIDDLE
+                : ObjectID.QIP_COOK_LADDER_TOP;
+        SceneObject ladder = ctx.objects().query().id(ladderId).results().nearest();
+        if (ladder == null || !ladder.isValid()) ladder = ctx.objects().query()
+                .named("Ladder").results().nearest();
+        if (ladder != null && ladder.isValid() && ladder.tileDistanceTo(ctx) <= 9) {
+            String action = up ? "Climb-up" : "Climb-down";
+            boolean climbed = ladder.interact(action) || ladder.interact(up ? "Climb Up" : "Climb Down");
+            log("Cook's Assistant: " + action + " mill ladder=" + climbed);
+            nextActionAt = System.currentTimeMillis() + 1200L;
+        } else logRecovery("Cook's Assistant: locating mill ladder on floor " + here.getPlane());
+        return false;
+    }
+
+    private boolean interactMill(APIContext ctx, int id, Tile tile, String[] actions, String reason) {
+        SceneObject object = ctx.objects().query().id(id).results().nearest();
+        if (object == null || !object.isValid() || object.tileDistanceTo(ctx) > 8) {
+            walkSafelyTo(ctx, tile, reason);
+            return false;
+        }
+        for (String action : actions) {
+            if (object.interact(action)) {
+                log("Cook's Assistant: " + reason + " via " + action);
+                millActionFailures = 0;
+                nextActionAt = System.currentTimeMillis() + 1100L;
+                return true;
+            }
+        }
+        millActionFailures++;
+        if (millActionFailures <= 3) logRecovery("Cook's Assistant: mill interaction failed: " + reason);
+        nextActionAt = System.currentTimeMillis() + 1500L;
         return false;
     }
 
@@ -352,11 +571,10 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
         int before = ctx.inventory().getCount(true, EGG);
         stats.setStatus("Cook's Assistant: taking Egg");
         log("Cook's Assistant: taking Egg at " + item.getLocation());
-        ctx.camera().turnTo(item);
+        org.example.core.navigation.CameraMovement.focus(ctx, item, logger);
         if (item.interact("Take", EGG) || item.interact("Take") || ctx.menu().interact("Take", item, false)) {
             Time.sleep(900, 1500, () -> ctx.inventory().getCount(true, EGG) > before, 100);
             consecutiveEggMisses = 0;
-            bankChecked = false;
         } else {
             logRecovery("Cook's Assistant: failed to interact Take on Egg at " + item.getLocation());
         }
@@ -468,10 +686,9 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
 
         stats.setStatus("Cook's Assistant: milking dairy cow");
         log("Cook's Assistant: milking dairy cow " + describeCow(ctx, cow));
-        ctx.camera().turnTo(cow);
+        org.example.core.navigation.CameraMovement.focus(ctx, cow, logger);
         if (clickMilkCow(ctx, cow)) {
             Time.sleep(1200, 2200, () -> ctx.inventory().contains(BUCKET_OF_MILK), 100);
-            bankChecked = false;
         } else {
             logRecovery("Cook's Assistant: failed to interact Milk on Dairy cow " + describeCow(ctx, cow));
         }
@@ -596,25 +813,22 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
     }
 
     private void handleGrandExchange(APIContext ctx) {
-        if (confirmHighPriceGeOffer(ctx)) {
-            return;
-        }
-
         if (pendingBuyItem == null) {
-            if (ctx.grandExchange().isOpen()) {
-                ctx.grandExchange().close();
-                Time.sleep(500, 800, () -> !ctx.grandExchange().isOpen(), 100);
-            }
+            closeGrandExchange(ctx);
             return;
         }
 
-        if (ctx.inventory().contains(pendingBuyItem)) {
+        if (ctx.inventory().contains(item -> isNamedItem(item, pendingBuyItem) && isNoted(item))) {
+            log("Cook's Assistant: GE ingredient is noted; converting it at bank");
+            clearPendingBuy(ctx);
+            bankChecked = false;
+            return;
+        }
+
+        if (hasUsable(ctx, pendingBuyItem)) {
             stats.setStatus("Cook's Assistant: bought " + pendingBuyItem);
             log("Cook's Assistant: GE purchase obtained: " + pendingBuyItem);
-            pendingBuyItem = null;
-            pendingBuyPrice = 0;
-            closeGrandExchange(ctx);
-            bankChecked = false;
+            clearPendingBuy(ctx);
             return;
         }
 
@@ -634,26 +848,72 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
             return;
         }
 
-        if (System.currentTimeMillis() >= nextGeCollectAt) {
-            collectGeOffers(ctx);
-            nextGeCollectAt = System.currentTimeMillis() + 2_500L;
-            if (ctx.inventory().contains(pendingBuyItem)) {
-                return;
-            }
-        }
-
-        pendingBuyPrice = Math.max(pendingBuyPrice, GePricing.quickBuyPrice(ctx, pendingBuyItem, buyPrice(pendingBuyItem)));
-        stats.setStatus("Cook's Assistant: buying " + pendingBuyItem);
-        log("Cook's Assistant: buying " + pendingBuyItem + " for " + pendingBuyPrice);
-        boolean placed = ctx.grandExchange().placeBuyOffer(pendingBuyItem, 1, pendingBuyPrice);
-        Time.sleep(900, 1400);
-        if (!placed) {
-            logRecovery("Cook's Assistant: GE buy offer was not placed for " + pendingBuyItem);
+        if (confirmHighPriceGeOffer(ctx)) return;
+        IGrandExchangeAPI.GrandExchangeScreen screen = ctx.grandExchange().getCurrentScreen();
+        if (screen == IGrandExchangeAPI.GrandExchangeScreen.SETUP_BUY_OFFER && offerPlacedAt > 0) {
+            if (System.currentTimeMillis() - offerPlacedAt > 5_000L) ctx.grandExchange().backToOverview();
+            nextActionAt = System.currentTimeMillis() + 1200L;
             return;
         }
 
-        collectGeOffers(ctx);
-        nextGeCollectAt = System.currentTimeMillis() + 2_500L;
+        GrandExchangeSlot slot = findBuySlot(ctx, pendingBuyItem);
+        if (geCollectionAttempts >= 3 && slot != null && slot.canCollect()
+                && System.currentTimeMillis() >= nextGeCollectAt) {
+            boolean collected = ctx.grandExchange().collectToBank();
+            logRecovery("Cook's Assistant: GE inventory collection stalled; collect-to-bank=" + collected);
+            nextGeCollectAt = System.currentTimeMillis() + 8_000L;
+            nextActionAt = System.currentTimeMillis() + 1000L;
+            if (collected) {
+                clearPendingBuy(ctx);
+                bankChecked = false;
+            }
+            return;
+        }
+        if (System.currentTimeMillis() >= nextGeCollectAt
+                && (slot != null && slot.canCollect()
+                || screen == IGrandExchangeAPI.GrandExchangeScreen.ACTIVE_BUY_OFFER)) {
+            boolean collected = ctx.grandExchange().collectToInventory();
+            log("Cook's Assistant: collect-to-inventory " + pendingBuyItem + "=" + collected);
+            geCollectionAttempts++;
+            nextGeCollectAt = System.currentTimeMillis() + 2_500L;
+            nextActionAt = System.currentTimeMillis() + 900L;
+            return;
+        }
+        if (slot != null && slot.canCollect()) {
+            nextActionAt = nextGeCollectAt;
+            return;
+        }
+        if (screen == IGrandExchangeAPI.GrandExchangeScreen.ACTIVE_BUY_OFFER) {
+            ctx.grandExchange().backToOverview();
+            nextActionAt = System.currentTimeMillis() + 900L;
+            return;
+        }
+        if (slot != null && slot.inUse()) {
+            stats.setStatus("Cook's Assistant: waiting for GE offer " + pendingBuyItem);
+            nextActionAt = System.currentTimeMillis() + 1500L;
+            return;
+        }
+        if (offerPlacedAt > 0) {
+            stats.setStatus("Cook's Assistant: verifying GE offer before retry");
+            nextActionAt = System.currentTimeMillis() + 2500L;
+            return;
+        }
+        if (screen != IGrandExchangeAPI.GrandExchangeScreen.OVERVIEW) {
+            ctx.grandExchange().backToOverview();
+            nextActionAt = System.currentTimeMillis() + 900L;
+            return;
+        }
+
+        stats.setStatus("Cook's Assistant: buying " + pendingBuyItem);
+        log("Cook's Assistant: buying " + pendingBuyItem + " for " + pendingBuyPrice);
+        boolean placed = ctx.grandExchange().placeBuyOffer(pendingBuyItem, 1, pendingBuyPrice);
+        nextActionAt = System.currentTimeMillis() + 1200L;
+        if (!placed) {
+            if (!confirmHighPriceGeOffer(ctx))
+                logRecovery("Cook's Assistant: GE buy offer was not placed for " + pendingBuyItem);
+            return;
+        }
+        offerPlacedAt = System.currentTimeMillis();
     }
 
     private void talkToCook(APIContext ctx) {
@@ -685,22 +945,57 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
         }
 
         if (cook != null && cook.isValid() && cook.tileDistanceTo(ctx) <= 8) {
+            if (!cook.canReach(ctx, 1)) {
+                if (openKitchenDoor(ctx, cook.getLocation())) return;
+                stats.setStatus("Cook's Assistant: approaching Cook through kitchen entrance");
+                walkSafelyTo(ctx, COOK_STAND_TILE, "Cook kitchen entrance");
+                nextActionAt = System.currentTimeMillis() + 1200L;
+                return;
+            }
             stats.setStatus("Cook's Assistant: talking to Cook");
             log("Cook's Assistant: talking to Cook"
                     + (hasAllFinalIngredients(ctx) ? " with ingredients" : " to start quest"));
-            ctx.camera().turnTo(cook);
+            org.example.core.navigation.CameraMovement.focus(ctx, cook, logger);
             if (cook.interact("Talk-to")) {
                 Time.sleep(1200, 2000,
                         () -> ctx.dialogues().isDialogueOpen() || ctx.dialogues().isChatOpen(),
                         100);
             }
+            nextActionAt = System.currentTimeMillis() + 1400L;
             return;
         }
 
         stats.setStatus("Cook's Assistant: walking to Cook");
         logTravel("Cook's Assistant: walking to Lumbridge Cook");
-        walkSafelyTo(ctx, COOK_AREA.getRandomTile(), "Lumbridge Cook");
+        if (openKitchenDoor(ctx, COOK_STAND_TILE)) return;
+        walkSafelyTo(ctx, COOK_STAND_TILE, "Lumbridge Cook");
         Time.sleep(700, 1100);
+    }
+
+    private boolean openKitchenDoor(APIContext ctx, Tile destination) {
+        Tile location = ctx.localPlayer().getLocation();
+        if (location == null || destination == null || destination.tileDistanceTo(ctx) > 12) return false;
+        SceneObject door = ctx.walking().getBlockingObjectBetween(location, destination);
+        if (!isOpenableDoor(door)) door = ctx.objects().query().named("Door")
+                .actions("Open").within(COOK_AREA).results().nearest();
+        if (!isOpenableDoor(door) || door.tileDistanceTo(ctx) > 8) return false;
+        if (door.tileDistanceTo(ctx) > 3) {
+            walkSafelyTo(ctx, door.getLocation(), "kitchen door");
+            nextActionAt = System.currentTimeMillis() + 1000L;
+            return true;
+        }
+        org.example.core.navigation.AccessRecovery.interaction(ctx, door, "Open");
+        boolean opened = door.interact("Open") || ctx.menu().interact("Open", door, false);
+        log("Cook's Assistant: opening kitchen door at " + door.getLocation() + "=" + opened);
+        nextActionAt = System.currentTimeMillis() + 1200L;
+        return true;
+    }
+
+    private static boolean isOpenableDoor(SceneObject object) {
+        if (object == null || !object.isValid() || !object.hasAction("Open")) return false;
+        String name = object.getName();
+        return name != null && (name.toLowerCase(Locale.ROOT).contains("door")
+                || name.toLowerCase(Locale.ROOT).contains("gate"));
     }
 
     private void walkToBankForIngredients(APIContext ctx) {
@@ -780,6 +1075,19 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
 
         int distance = destination.tileDistanceTo(ctx);
         if (distance <= 35) {
+            Tile here = ctx.localPlayer().getLocation();
+            if (here != null) {
+                SceneObject blocker = ctx.walking().getBlockingObjectBetween(here, destination.getLocation());
+                if (isOpenableDoor(blocker) && blocker.tileDistanceTo(ctx) <= 8) {
+                    if (blocker.tileDistanceTo(ctx) > 3)
+                        return walkLocallyTo(ctx, blocker.getLocation(), label + " route door");
+                    boolean opened = blocker.interact("Open")
+                            || ctx.menu().interact("Open", blocker, false);
+                    log("Cook's Assistant: opening route door/gate for " + label + "=" + opened);
+                    nextActionAt = System.currentTimeMillis() + 1200L;
+                    return true;
+                }
+            }
             if (walkLocallyTo(ctx, destination, label)) {
                 return true;
             }
@@ -800,9 +1108,7 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
     private boolean walkLocallyTo(APIContext ctx, Locatable destination, String label) {
         try {
             logTravel("Cook's Assistant: walking locally to " + label);
-            boolean walked = ctx.walking().walkOnScreen(destination)
-                    || ctx.walking().walkToOnScreen(destination)
-                    || ctx.walking().walkOnMap(destination)
+            boolean walked = Navigation.walkLocally(ctx, destination)
                     || ctx.walking().walkTo(destination);
             if (walked) {
                 Time.sleep(700, 1200, () -> ctx.localPlayer().isMoving(), 100);
@@ -815,14 +1121,14 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
     }
 
     private boolean hasAllFinalIngredients(APIContext ctx) {
-        return ctx.inventory().contains(BUCKET_OF_MILK)
-                && ctx.inventory().contains(EGG)
-                && ctx.inventory().contains(POT_OF_FLOUR);
+        return hasUsable(ctx, BUCKET_OF_MILK)
+                && hasUsable(ctx, EGG)
+                && hasUsable(ctx, POT_OF_FLOUR);
     }
 
     private String firstMissingIngredient(APIContext ctx) {
         for (String item : FINAL_INGREDIENTS) {
-            if (!ctx.inventory().contains(item)) {
+            if (!hasUsable(ctx, item)) {
                 return item;
             }
         }
@@ -830,32 +1136,31 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
     }
 
     private String firstMissingBuyableIngredient(APIContext ctx) {
-        if (!ctx.inventory().contains(POT_OF_FLOUR)) {
+        if (!hasUsable(ctx, POT_OF_FLOUR)) {
             return POT_OF_FLOUR;
         }
-        if (!ctx.inventory().contains(BUCKET_OF_MILK) && !ctx.inventory().contains(BUCKET)) {
+        if (!hasUsable(ctx, BUCKET_OF_MILK)) {
             return BUCKET_OF_MILK;
         }
-        if (!ctx.inventory().contains(EGG) && ctx.inventory().getCount(COINS) >= buyPrice(EGG)) {
+        if (!hasUsable(ctx, EGG)) {
             return EGG;
         }
         return null;
     }
 
     private boolean needsGeBuy(APIContext ctx) {
-        return firstMissingBuyableIngredient(ctx) != null
-                || !ctx.inventory().contains(POT_OF_FLOUR);
+        return firstMissingBuyableIngredient(ctx) != null;
     }
 
     private int estimatedMissingBuyCost(APIContext ctx) {
         int cost = 0;
-        if (!ctx.inventory().contains(POT_OF_FLOUR)) {
+        if (!hasUsable(ctx, POT_OF_FLOUR)) {
             cost += buyPrice(POT_OF_FLOUR);
         }
-        if (!ctx.inventory().contains(BUCKET_OF_MILK) && !ctx.inventory().contains(BUCKET)) {
+        if (!hasUsable(ctx, BUCKET_OF_MILK)) {
             cost += buyPrice(BUCKET_OF_MILK);
         }
-        if (!ctx.inventory().contains(EGG)) {
+        if (!hasUsable(ctx, EGG)) {
             cost += buyPrice(EGG);
         }
         return cost;
@@ -870,6 +1175,47 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
         };
     }
 
+    private static boolean isNamedItem(Item item, String name) {
+        return item != null && name.equalsIgnoreCase(item.getName());
+    }
+
+    private static boolean isNoted(Item item) {
+        return item != null && (item.isNoted()
+                || (item.getId() == item.getNotedId() && item.getUnNotedId() != item.getId()));
+    }
+
+    private static boolean hasUsable(APIContext ctx, String name) {
+        return ctx.inventory().contains(item -> isNamedItem(item, name) && !isNoted(item));
+    }
+
+    private int materialSignature(APIContext ctx) {
+        int signature = 0;
+        for (String item : FINAL_INGREDIENTS) signature = signature * 2 + (hasUsable(ctx, item) ? 1 : 0);
+        return signature;
+    }
+
+    private GrandExchangeSlot findBuySlot(APIContext ctx, String itemName) {
+        List<GrandExchangeSlot> slots = ctx.grandExchange().getSlots();
+        if (slots == null) return null;
+        for (GrandExchangeSlot slot : slots) {
+            if (slot == null || slot.getOffer() == null) continue;
+            GrandExchangeOffer.OfferState state = slot.getState();
+            if (state != GrandExchangeOffer.OfferState.BUYING
+                    && state != GrandExchangeOffer.OfferState.BOUGHT
+                    && state != GrandExchangeOffer.OfferState.CANCELLED_BUY) continue;
+            if (itemName.equalsIgnoreCase(slot.getOffer().getItemName())) return slot;
+        }
+        return null;
+    }
+
+    private void clearPendingBuy(APIContext ctx) {
+        pendingBuyItem = null;
+        pendingBuyPrice = 0;
+        offerPlacedAt = 0L;
+        geCollectionAttempts = 0;
+        closeGrandExchange(ctx);
+    }
+
     private boolean shouldKeepInventoryItem(String name) {
         return name != null
                 && (name.equals(EGG)
@@ -881,7 +1227,7 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
 
     private boolean confirmHighPriceGeOffer(APIContext ctx) {
         WidgetChild yes = findVisibleWidgetByText(ctx, "Yes");
-        if (yes == null) {
+        if (yes == null || !hasVisibleWidgetText(ctx, "much higher than the guide price")) {
             return false;
         }
 
@@ -895,12 +1241,23 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
                 || ctx.menu().interact("Yes", true)
                 || ctx.menu().interact("Yes")) {
             Time.sleep(1200, 1800);
-            collectGeOffers(ctx);
+            nextActionAt = System.currentTimeMillis() + 1200L;
             return true;
         }
 
         Time.sleep(600, 900);
         return true;
+    }
+
+    private boolean hasVisibleWidgetText(APIContext ctx, String text) {
+        for (WidgetChild widget : ctx.widgets().getAllChildren(candidate -> {
+            if (!isVisibleWidget(candidate)) return false;
+            String label = candidate.getText();
+            String raw = candidate.getRawText();
+            return label != null && label.toLowerCase(Locale.ROOT).contains(text.toLowerCase(Locale.ROOT))
+                    || raw != null && raw.toLowerCase(Locale.ROOT).contains(text.toLowerCase(Locale.ROOT));
+        })) return true;
+        return false;
     }
 
     private WidgetChild findVisibleWidgetByText(APIContext ctx, String text) {
@@ -948,13 +1305,12 @@ public class CookAssistantQuestModule implements ManagedF2PModule {
                 && widget.getHeight() > 0;
     }
 
-    private void collectGeOffers(APIContext ctx) {
-        try {
-            ctx.grandExchange().collectToInventory();
-            Time.sleep(500, 800);
-        } catch (RuntimeException ignored) {
-            // No ready offer is fine; the next loop will retry.
-        }
+    private void closeCompletionScreen(APIContext ctx) {
+        if (!hasVisibleWidgetText(ctx, "quest complete")
+                && !hasVisibleWidgetText(ctx, "you have completed")) return;
+        log("Cook's Assistant: closing quest completion screen");
+        if (!ctx.widgets().closeInterface()) ctx.keyboard().sendKey(KeyEvent.VK_ESCAPE);
+        nextActionAt = System.currentTimeMillis() + 800L;
     }
 
     private void closeGrandExchange(APIContext ctx) {
